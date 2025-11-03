@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+.env
+venv/
+.venv/
+py-embed/
+vendor/
+export_Fred_Larry/
+data/
+report_*.xlsx
+*.lnk
+IMG_*.jpg

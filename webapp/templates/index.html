@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>Quartalsreport Generator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Quartalsreport Generator</h1>
+      <section class="card">
+        <form id="upload-form">
+          <div class="field">
+            <label for="csv-file">CSV (Soll/Ist)</label>
+            <input id="csv-file" name="csv_file" type="file" accept=".csv" required />
+          </div>
+          <div class="field">
+            <label for="xml-file">XML (Zeiteinträge)</label>
+            <input id="xml-file" name="xml_file" type="file" accept=".xml" required />
+          </div>
+          <div class="field">
+            <label for="quarter">Quartal (optional, z. B. 2025Q3)</label>
+            <input id="quarter" name="quarter" type="text" placeholder="Auto-Auswahl" />
+          </div>
+          <button id="submit-btn" type="submit">Report erzeugen</button>
+        </form>
+      </section>
+
+      <section id="status-card" class="card hidden">
+        <h2>Status</h2>
+        <div class="status-line">
+          <span id="status-message">Warte auf Start...</span>
+        </div>
+        <div class="progress">
+          <div id="progress-bar"></div>
+        </div>
+        <div class="status-line">
+          <span>Warteschlange:</span>
+          <span id="queue-position">-</span>
+        </div>
+        <div id="error-box" class="error hidden"></div>
+        <div id="download-box" class="hidden">
+          <a id="download-link" href="#" download>Ergebnis herunterladen</a>
+          <button id="reset-btn" type="button">Neuen Report starten</button>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
