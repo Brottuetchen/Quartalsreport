@@ -4,8 +4,8 @@ import asyncio
 import shutil
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Deque, Dict, Optional
 
@@ -21,6 +21,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
 JOBS_DIR = DATA_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+CLEANUP_RETENTION_DAYS = 7
+CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # einmal täglich prüfen
 
 
 @dataclass
@@ -118,6 +121,45 @@ async def worker() -> None:
 @app.on_event("startup")
 async def on_startup() -> None:
     asyncio.create_task(worker())
+    asyncio.create_task(garbage_collector())
+    # Einmalig beim Start Altlasten bereinigen
+    await cleanup_stale_jobs()
+
+
+async def garbage_collector() -> None:
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        await cleanup_stale_jobs()
+
+
+async def cleanup_stale_jobs() -> None:
+    cutoff = datetime.utcnow() - timedelta(days=CLEANUP_RETENTION_DAYS)
+    async with queue_lock:
+        removable_ids = [
+            job_id
+            for job_id, job in list(job_store.items())
+            if job.created_at < cutoff and job.status in {"finished", "failed"}
+        ]
+        for job_id in removable_ids:
+            job = job_store.pop(job_id, None)
+            if job_id in pending_jobs:
+                pending_jobs.remove(job_id)
+            if job and job.output_dir.exists():
+                shutil.rmtree(job.output_dir, ignore_errors=True)
+
+    # Auch verwaiste Verzeichnisse entfernen, die keinen Job mehr haben
+    for child in JOBS_DIR.iterdir():
+        if not child.is_dir():
+            continue
+        job_id = child.name
+        if job_id in job_store:
+            continue
+        try:
+            mtime = datetime.utcfromtimestamp(child.stat().st_mtime)
+        except OSError:
+            continue
+        if mtime < cutoff:
+            shutil.rmtree(child, ignore_errors=True)
 
 
 def _queue_position(job_id: str) -> Optional[int]:
@@ -229,4 +271,3 @@ async def healthcheck():
 
 
 __all__ = ["app"]
-
