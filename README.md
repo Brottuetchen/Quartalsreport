@@ -1,54 +1,78 @@
-# Quartalsreport Generator
+Quartalsreport Generator
+========================
 
-FastAPI-based web service and automation toolkit for assembling quarterly bonus reports from a workload CSV (Soll/Ist) and an XML export of recorded hours. The service produces an Excel workbook per quarter and per employee that includes colour-coded status tables, bonus-hour adjustments, and helper tables for transferring totals into the corporate template.
-
----
-
-## Features
-- Upload CSV (Soll/Ist budgets) and XML (time tracking) files via the web UI or REST API.
-- Automatically determines the most recent quarter or accepts an explicit quarter selection (e.g. `Q3-2025`).
-- Builds an `.xlsx` workbook with per-employee sheets, bonus adjustments, special-project handling, and a transfer helper table.
-- Docker image for easy deployment; optional HTTP Basic Auth via environment variables.
-- Portable PowerShell script for running the legacy CLI on Windows without administrator rights.
+Webdienst auf Basis von FastAPI zur Erstellung quartalsweiser Bonusberichte aus einer Soll/Ist-CSV und einer XML-Zeiterfassung. Das Tool erzeugt je Quartal und Mitarbeiter eine Excel-Arbeitsmappe mit farbcodierten Tabellen, Bonus-Anpassungen, Sonderprojekt-Logik und einer Uebertragshilfe fuer die Konzernvorlage.
 
 ---
 
-## Repository Layout
+Inhalt
+------
+
+- [Funktionen](#funktionen)
+- [Projektstruktur](#projektstruktur)
+- [Voraussetzungen](#voraussetzungen)
+- [Docker-Nutzung](#docker-nutzung)
+- [Lokale Entwicklung ohne Docker](#lokale-entwicklung-ohne-docker)
+- [REST-API](#rest-api)
+- [Aufbau der generierten Excel-Dateien](#aufbau-der-generierten-excel-dateien)
+- [Portabler Windows-Runner](#portabler-windows-runner)
+- [Troubleshooting](#troubleshooting)
+- [Beitragen](#beitragen)
+- [Lizenz](#lizenz)
+
+---
+
+Funktionen
+----------
+
+- CSV (Soll/Ist) und XML (Zeiterfassung) per Weboberflaeche oder REST hochladen.
+- Automatische Quartalsauswahl oder explizite Vorgabe (z. B. `Q3-2025`).
+- Erstellung einer `.xlsx`-Mappe mit Monatsuebersichten, Bonus-Anpassungsfeldern und separater Sonderprojekt-Summe.
+- Generierte Werte per Uebertragshilfe einfach in die Firmenvorlage kopieren.
+- Bereitstellung per Docker-Container, optional mit HTTP Basic Auth.
+- Windows-Skripte fuer den portablen Offline-Einsatz.
+
+---
+
+Projektstruktur
+---------------
 
 ```
 Quartalsreport/
-├─ data/                  # Local job storage (created automatically)
+├─ data/                  # Jobdaten (wird automatisch erzeugt)
 ├─ webapp/
-│  ├─ report_generator.py # Core report-building logic
-│  ├─ server.py           # FastAPI server + job queue
-│  ├─ templates/          # Jinja2 HTML templates
-│  └─ static/             # CSS/JS assets for the web UI
-├─ Dockerfile             # Container image definition
-├─ requirements.txt       # Python package dependencies
-├─ run_portable.ps1       # Windows helper to run the legacy CLI without install
-└─ run_portable.cmd       # Convenience wrapper for PowerShell script
+│  ├─ report_generator.py # Kernlogik zur Excelausgabe
+│  ├─ server.py           # FastAPI-Server + Job-Queue
+│  ├─ templates/          # Jinja2-Templates fuer das Web-UI
+│  └─ static/             # CSS/JS-Assets
+├─ Dockerfile             # Containerdefinition
+├─ requirements.txt       # Python-Abhaengigkeiten
+├─ run_portable.ps1       # Portabler Windows-Runner (PowerShell)
+└─ run_portable.cmd       # CMD-Wrapper fuer PowerShell-Skript
 ```
 
 ---
 
-## Prerequisites
+Voraussetzungen
+---------------
 
-- CSV export with columns `Projekte`, `Arbeitspaket`, `Iststunden`, `Sollstunden Budget` (tab-delimited UTF-16/UTF-8).
-- XML export with time-tracking data (one record per employee/project/milestone).
-- Optional: Python 3.11+ for local development.
-- Optional: Docker Engine 20.10+ for containerised runs.
+- CSV-Export mit Spalten `Projekte`, `Arbeitspaket`, `Iststunden`, `Sollstunden Budget` (meist Tab-getrennt, UTF-16 oder UTF-8).
+- XML-Export der Zeiterfassung mit Mitarbeiter-, Projekt- und Meilensteininformationen.
+- Optional: Python 3.11+ fuer lokale Entwicklung.
+- Optional: Docker Engine 20.10+ fuer Containerbetrieb.
 
 ---
 
-## Docker Usage
+Docker-Nutzung
+--------------
 
-### 1. Build the image
+### 1. Image bauen
 
 ```powershell
 docker build -t quartalsreport .
 ```
 
-### 2. Run the container
+### 2. Container starten
 
 ```powershell
 docker run --rm ^
@@ -57,17 +81,15 @@ docker run --rm ^
   quartalsreport
 ```
 
-This exposes the web UI at <http://localhost:9999>.  
-The `/app/data` volume persists generated jobs (`data/jobs/<job-id>/`).
+- Weboberflaeche: <http://localhost:9999>
+- Datenverzeichnis: `data/jobs/<job-id>/`
 
 ### Optional: HTTP Basic Auth
 
-Set environment variables before running:
-
 ```powershell
 docker run --rm ^
-  -e BASIC_AUTH_USERNAME=youruser ^
-  -e BASIC_AUTH_PASSWORD=yourpass ^
+  -e BASIC_AUTH_USERNAME=benutzer ^
+  -e BASIC_AUTH_PASSWORD=geheim ^
   -p 9999:9999 ^
   -v "$(pwd)/data:/app/data" ^
   quartalsreport
@@ -75,7 +97,8 @@ docker run --rm ^
 
 ---
 
-## Local Development (without Docker)
+Lokale Entwicklung ohne Docker
+------------------------------
 
 ```powershell
 python -m venv .venv
@@ -84,78 +107,86 @@ pip install -r requirements.txt
 uvicorn webapp.server:app --host 0.0.0.0 --port 9999 --reload
 ```
 
-Then open <http://localhost:9999>.
+Danach <http://localhost:9999> im Browser oeffnen.
 
 ---
 
-## REST API Overview
+REST-API
+--------
 
-| Method | Endpoint                 | Description                                                 |
-|--------|--------------------------|-------------------------------------------------------------|
-| POST   | `/api/jobs`              | Create a job (`csv_file`, `xml_file`, optional `quarter`)   |
-| GET    | `/api/jobs/{job_id}`     | Check status/progress                                       |
-| GET    | `/api/jobs/{job_id}/download` | Download finished Excel (if `status == finished`)     |
-| DELETE | `/api/jobs/{job_id}`     | Cancel/remove a queued or finished job                      |
-| GET    | `/healthz`               | Simple health probe                                          |
+| Methode | Endpoint                     | Beschreibung                                               |
+|---------|------------------------------|-------------------------------------------------------------|
+| POST    | `/api/jobs`                  | Job mit `csv_file`, `xml_file`, optional `quarter` anlegen |
+| GET     | `/api/jobs/{job_id}`         | Status und Fortschritt abrufen                             |
+| GET     | `/api/jobs/{job_id}/download`| Fertige Excel herunterladen (Status `finished`)            |
+| DELETE  | `/api/jobs/{job_id}`         | Job loeschen (falls nicht in Bearbeitung)                  |
+| GET     | `/healthz`                   | Gesundheitscheck                                           |
 
-Example job creation with explicit quarter:
+Beispiel (PowerShell, `curl.exe`):
 
 ```powershell
-curl -X POST http://localhost:9999/api/jobs ^
-  -F "csv_file=@C:\path\report.csv" ^
-  -F "xml_file=@C:\path\zeiten.xml" ^
+curl.exe -X POST http://localhost:9999/api/jobs ^
+  -F "csv_file=@C:\Pfad\report.csv" ^
+  -F "xml_file=@C:\Pfad\zeiten.xml" ^
   -F "quarter=Q3-2025"
 ```
 
-Accepted quarter formats: `Q3-2025`, `2025Q3`, `Q3/2025`, `2025-Q3`.
+Akzeptierte Quartals-Formate: `Q3-2025`, `2025Q3`, `Q3/2025`, `2025-Q3`.
 
 ---
 
-## Generated Workbook Structure
+Aufbau der generierten Excel-Dateien
+------------------------------------
 
-For each employee present in the selected quarter:
+Für jeden Mitarbeiter des gewaehlten Quartals:
 
-1. **Monthly tables** with Soll/Ist, recorded hours, colour-coded percentages, and a `Bonus-Anpassung (h)` column for manual adjustments.
-2. **Monthly summary rows** (`Summe`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`) where totals update automatically when adjustments are entered.
-3. **Quarterly overview** summarising cumulative progress on quarterly milestones.
-4. **Transfer helper** table (`Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`) for copy/paste into the corporate Excel template.
+1. **Monatsbereiche** mit Soll/Ist, gebuchten Stunden, Farbkennzeichnung und der Spalte `Bonus-Anpassung (h)` fuer manuelle Korrekturen.
+2. **Monatssummen** (Gesamtstunden, Bonusstunden, Sonderprojekt-Bonusstunden) mit automatischer Aktualisierung bei Anpassungen.
+3. **Quartalsuebersicht** fuer Meilensteine mit Quartalssoll.
+4. **Uebertragshilfe**: Tabelle `Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`.
 
-All generated workbooks are stored under `data/jobs/<job-id>/Q{quarter}-{year}.xlsx`.
+Dateien liegen nach Fertigstellung unter `data/jobs/<job-id>/Q{Quartal}-{Jahr}.xlsx`.
 
 ---
 
-## Legacy Portable Runner (Windows)
+Portabler Windows-Runner
+------------------------
 
-`run_portable.ps1` downloads a portable Python runtime, installs dependencies locally, and launches the legacy CLI (`Monatsbericht_Bonus_Quartal.py`). Usage:
+Das Skript `run_portable.ps1` laedt eine portable Python-Version, richtet Abhaengigkeiten ein und startet den Legacy-Generator `Monatsbericht_Bonus_Quartal.py`.
 
 ```powershell
-.\run_portable.ps1 -CsvPath "C:\path\report.csv" -XmlPath "C:\path\zeiten.xml" -OutputDir "C:\out"
+.\run_portable.ps1 -CsvPath "C:\Pfad\report.csv" `
+                   -XmlPath "C:\Pfad\zeiten.xml" `
+                   -OutputDir "C:\Ausgabe"
 ```
 
-> The portable script executes interactively and mirrors the logic within `webapp/report_generator.py`. Prefer the web service for multi-user scenarios.
+Hinweis: Der portable Runner arbeitet interaktiv. Fuer Mehrbenutzerbetrieb wird die Webanwendung empfohlen.
 
 ---
 
-## Troubleshooting
+Troubleshooting
+---------------
 
-- **HTTP 422 on `/`**: Occurs when visiting the API without the required form data; use the web UI or POST `/api/jobs`.
-- **Job stuck in "queued"**: Check Docker/container logs; ensure only one worker is running and the XML contains the requested quarter.
-- **Empty Excel output**: Verify that CSV/ XML share normalised project and milestone names (`proj_norm`, `ms_norm`); the generator matches on these fields.
-- **Permission errors on `data/jobs`**: Confirm the mounted volume (Docker) or local filesystem allows write access for the running user.
-- **Basic Auth prompts unexpectedly**: Remove `BASIC_AUTH_*` env vars or supply the correct credentials.
-
----
-
-## Contributing Guidelines
-
-1. Create a virtual environment and install dependencies (`pip install -r requirements.txt`).
-2. Run `python -m compileall webapp/report_generator.py` or generate a sample workbook to validate changes.
-3. Ensure Docker builds cleanly (`docker build .`).
-4. Open a pull request with a concise summary of changes and test evidence.
+- **HTTP 422 auf `/`**: Direktaufruf ohne Formulardaten. Weboberflaeche nutzen oder POST `/api/jobs`.
+- **Job bleibt auf "queued"**: Logs pruefen. Sicherstellen, dass genau ein Worker laeuft und das Quartal in der XML vorhanden ist.
+- **Excel enthaelt kaum Daten**: CSV- und XML-Projekte muessen nach Normalisierung (`proj_norm`, `ms_norm`) uebereinstimmen.
+- **Schreibrechte**: Docker-Volume oder lokales Dateisystem auf Schreibrechte pruefen (`data/jobs`).
+- **Basic Auth unerwartet aktiv**: Umgebungsvariablen `BASIC_AUTH_USERNAME/PASSWORD` entfernen oder korrekte Daten nutzen.
 
 ---
 
-## License
+Beitragen
+---------
 
-Internal project. Copyright © 2025.
+1. Virtuelle Umgebung erstellen, Abhaengigkeiten installieren: `pip install -r requirements.txt`.
+2. Tests bzw. `python -m compileall webapp/report_generator.py` ausfuehren oder eine Beispiel-Excel erzeugen.
+3. Sicherstellen, dass der Docker-Build erfolgreich ist.
+4. Pull Request mit kurzer Aenderungsbeschreibung und Testergebnissen eroefnnen.
+
+---
+
+Lizenz
+------
+
+Internes Projekt. Copyright (c) 2025.
 
