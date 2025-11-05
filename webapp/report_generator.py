@@ -40,6 +40,21 @@ QUARTERLY_BUDGETS: Dict[str, float] = {
 }
 
 
+MONTH_NAMES = {
+    1: "Januar",
+    2: "Februar",
+    3: "März",
+    4: "April",
+    5: "Mai",
+    6: "Juni",
+    7: "Juli",
+    8: "August",
+    9: "September",
+    10: "Oktober",
+    11: "November",
+    12: "Dezember",
+}
+
 ProgressCallback = Callable[[int, str], None]
 
 
@@ -267,12 +282,16 @@ def build_quarterly_report(
 
     for idx_emp, emp in enumerate(employees, start=1):
         ws = wb.create_sheet(title=emp[:31])
-        ws.append([f"{emp} – Quartalsreport {target_quarter}"])
+        monthly_bonus_total_cells: List[str] = []
+        monthly_special_bonus_total_cells: List[str] = []
+        transfer_entries: List[Tuple[str, str, str, str]] = []
+        ws.append([f"{emp} - Quartalsreport {target_quarter}"])
         ws.append([])
 
         current_row = 3
         total_hours_all_months = 0.0
         total_bonus_hours_quarter = 0.0
+        total_bonus_special_hours_quarter = 0.0
 
         for month in months:
             df_month = df_quarter[(df_quarter["period"] == month) & (df_quarter["staff_name"] == emp)].copy()
@@ -343,27 +362,23 @@ def build_quarterly_report(
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
 
-            month_name_de = {
-                'January': 'Januar', 'February': 'Februar', 'March': 'März',
-                'April': 'April', 'May': 'Mai', 'June': 'Juni',
-                'July': 'Juli', 'August': 'August', 'September': 'September',
-                'October': 'Oktober', 'November': 'November', 'December': 'Dezember'
-            }
-            month_str = month.strftime('%B %Y')
-            for en, de in month_name_de.items():
-                month_str = month_str.replace(en, de)
+            month_name = MONTH_NAMES.get(int(month.month), month.strftime('%B'))
+            month_str = f"{month_name} {month.year}"
 
             ws.append([f"--- {month_str} ---"])
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
             current_row += 1
 
             bonus_hours_month = 0.0
+            bonus_hours_month_special = 0.0
+            adjustment_cells_regular: List[str] = []
+            adjustment_cells_special: List[str] = []
 
             for proj, proj_block in month_data.groupby("Projekte", sort=False):
                 proj_block = proj_block.reset_index(drop=True)
@@ -373,62 +388,78 @@ def build_quarterly_report(
                     ms_type = row_data["MeilensteinTyp"]
                     typ_short = "Q" if ms_type == "quarterly" else "M"
 
+                    hours_value = float(row_data.get("hours") or 0.0)
+                    is_special_project = is_bonus_project(proj) or is_bonus_project(row_data.get("proj_norm", ""))
+                    bonus_candidate = False
+                    should_color = False
+                    color_percentage = 0.0
+
                     if ms_type == "monthly":
-                        soll = round(row_data["Soll"], 2)
-                        ist = round(row_data["Ist"], 2)
-                        prozent = (ist / soll * 100.0) if soll > 0 else 0.0
-                        if prozent < 100.0:
-                            bonus_hours_month += float(row_data["hours"]) or 0.0
+                        soll_value = float(row_data.get("Soll") or 0.0)
+                        ist_value = float(row_data.get("Ist") or 0.0)
+                        ist_display = ist_value if ist_value else hours_value
+                        if soll_value > 0:
+                            pct_value = (ist_value / soll_value) * 100.0 if soll_value else 0.0
+                            should_color = True
+                            color_percentage = pct_value
+                            if pct_value < 100.0:
+                                bonus_candidate = True
+                        else:
+                            pct_value = 0.0
+                            bonus_candidate = True
                         ws.append([
                             proj if i == 0 else "",
                             row_data["Meilenstein"],
                             typ_short,
-                            soll,
-                            ist,
-                            round(row_data["hours"], 2),
-                            round(prozent, 2)
+                            round(soll_value, 2),
+                            round(ist_display, 2),
+                            round(hours_value, 2),
+                            round(pct_value, 2),
+                            None,
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
                         cum_ist = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
                         prozent = (cum_ist / q_soll * 100.0) if q_soll > 0 else 0.0
                         if prozent < 100.0:
-                            bonus_hours_month += float(row_data["hours"]) or 0.0
+                            bonus_candidate = True
+                        should_color = q_soll > 0
+                        color_percentage = prozent
                         ws.append([
                             proj if i == 0 else "",
                             row_data["Meilenstein"],
                             typ_short,
                             round(q_soll, 2) if q_soll > 0 else "-",
                             round(cum_ist, 2) if cum_ist > 0 else 0.0,
-                            round(row_data["hours"], 2),
-                            round(prozent, 2) if q_soll > 0 else "-"
+                            round(hours_value, 2),
+                            round(prozent, 2) if q_soll > 0 else "-",
+                            None,
                         ])
 
                     for cell in ws[current_row]:
                         cell.border = border
 
-                    pct_cell = ws.cell(row=current_row, column=7)
-                    should_color = False
-                    if ms_type == "monthly":
-                        if row_data["Soll"] > 0:
-                            prozent_col = (row_data["Ist"] / row_data["Soll"] * 100.0)
-                            should_color = True
-                        else:
-                            prozent_col = 0.0
+                    adj_cell = ws.cell(row=current_row, column=8)
+                    if is_special_project:
+                        adjustment_cells_special.append(adj_cell.coordinate)
                     else:
-                        q_soll_tmp = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
-                        if q_soll_tmp > 0:
-                            cum_ist_tmp = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
-                            prozent_col = (cum_ist_tmp / q_soll_tmp * 100.0)
-                            should_color = True
-                        else:
-                            prozent_col = 0.0
+                        adjustment_cells_regular.append(adj_cell.coordinate)
+                    adj_cell.number_format = "0.00"
+
                     if should_color:
+                        pct_cell = ws.cell(row=current_row, column=7)
                         pct_cell.fill = PatternFill(
-                            start_color=status_color_hex(prozent_col),
-                            end_color=status_color_hex(prozent_col),
+                            start_color=status_color_hex(color_percentage),
+                            end_color=status_color_hex(color_percentage),
                             fill_type="solid",
                         )
+
+                    if bonus_candidate:
+                        if is_special_project:
+                            bonus_hours_month_special += hours_value
+                        else:
+                            bonus_hours_month += hours_value
+
                     current_row += 1
 
                 block_size = len(proj_block)
@@ -439,19 +470,89 @@ def build_quarterly_report(
 
             sum_hours = month_data["hours"].sum()
             total_hours_all_months += sum_hours
-            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), ""])
+            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", ""])
+            sum_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
+            sum_total_cell = ws.cell(row=sum_row_idx, column=6)
+            sum_total_cell.number_format = "0.00"
+            sum_total_cell.value = round(sum_hours, 2)
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden", "", "", "", round(bonus_hours_month, 2), ""])
+            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", ""])
+            bonus_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
-            current_row += 1
-
+            bonus_base_cell = ws.cell(row=bonus_row_idx, column=7)
+            bonus_base_cell.number_format = "0.00"
+            bonus_base_cell.value = round(bonus_hours_month, 2)
+            bonus_total_cell = ws.cell(row=bonus_row_idx, column=6)
+            bonus_total_cell.number_format = "0.00"
+            if adjustment_cells_regular:
+                adj_formula = ",".join(adjustment_cells_regular)
+                adj_sum_formula = f"SUM({adj_formula})"
+                bonus_adj_cell = ws.cell(row=bonus_row_idx, column=8)
+                bonus_adj_cell.value = f"={adj_sum_formula}"
+                bonus_adj_cell.number_format = "0.00"
+                bonus_total_cell.value = f"={bonus_base_cell.coordinate}+{bonus_adj_cell.coordinate}"
+            else:
+                bonus_total_cell.value = round(bonus_hours_month, 2)
+                bonus_adj_cell = ws.cell(row=bonus_row_idx, column=8)
+                bonus_adj_cell.value = 0
+                bonus_adj_cell.number_format = "0.00"
+            monthly_bonus_total_cells.append(bonus_total_cell.coordinate)
             total_bonus_hours_quarter += bonus_hours_month
+            current_row += 1
+
+            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", ""])
+            special_row_idx = current_row
+            for cell in ws[current_row]:
+                cell.font = Font(bold=True)
+                cell.border = border
+            special_base_cell = ws.cell(row=special_row_idx, column=7)
+            special_base_cell.number_format = "0.00"
+            special_base_cell.value = round(bonus_hours_month_special, 2)
+            special_total_cell = ws.cell(row=special_row_idx, column=6)
+            special_total_cell.number_format = "0.00"
+            if adjustment_cells_special:
+                adj_formula_special = ",".join(adjustment_cells_special)
+                adj_sum_formula_special = f"SUM({adj_formula_special})"
+                special_adj_cell = ws.cell(row=special_row_idx, column=8)
+                special_adj_cell.value = f"={adj_sum_formula_special}"
+                special_adj_cell.number_format = "0.00"
+                special_total_cell.value = f"={special_base_cell.coordinate}+{special_adj_cell.coordinate}"
+            else:
+                special_total_cell.value = round(bonus_hours_month_special, 2)
+                special_adj_cell = ws.cell(row=special_row_idx, column=8)
+                special_adj_cell.value = 0
+                special_adj_cell.number_format = "0.00"
+            monthly_special_bonus_total_cells.append(special_total_cell.coordinate)
+            total_bonus_special_hours_quarter += bonus_hours_month_special
+            current_row += 1
+
+            transfer_entries.append((month_str, sum_total_cell.coordinate, bonus_total_cell.coordinate, special_total_cell.coordinate))
+
+            ws.append([])
+            current_row += 1
+
+        if transfer_entries:
+            ws.append(["--- Übertragshilfe ---"])
+            ws[f"A{current_row}"].font = Font(bold=True, size=12)
+            current_row += 1
+
+            ws.append(["Monat", "Mitarbeiter", "Prod. Stunden", "Bonusberechtigte Stunden", "Bonusberechtigte Stunden Sonderprojekt"])
+            for cell in ws[current_row]:
+                cell.font = Font(bold=True)
+                cell.border = border
+            current_row += 1
+
+            for month_label, total_cell, bonus_cell, special_cell in transfer_entries:
+                ws.append([month_label, emp, f"={total_cell}", f"={bonus_cell}", f"={special_cell}"])
+                for cell in ws[current_row]:
+                    cell.border = border
+                current_row += 1
 
             ws.append([])
             current_row += 1
@@ -552,7 +653,26 @@ def build_quarterly_report(
             cell.font = Font(bold=True)
         current_row += 1
 
-        ws.append(["Bonusberechtigte Stunden (Quartal):", round(total_bonus_hours_quarter, 2)])
+        ws.append(["Bonusberechtigte Stunden (Quartal):", 0])
+        quarter_bonus_row = current_row
+        quarter_bonus_cell = ws.cell(row=quarter_bonus_row, column=2)
+        if monthly_bonus_total_cells:
+            quarter_bonus_cell.value = f"=SUM({','.join(monthly_bonus_total_cells)})"
+        else:
+            quarter_bonus_cell.value = round(total_bonus_hours_quarter, 2)
+        quarter_bonus_cell.number_format = "0.00"
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+        current_row += 1
+
+        ws.append(["Bonusberechtigte Stunden Sonderprojekt (Quartal):", 0])
+        quarter_special_row = current_row
+        quarter_special_cell = ws.cell(row=quarter_special_row, column=2)
+        if monthly_special_bonus_total_cells:
+            quarter_special_cell.value = f"=SUM({','.join(monthly_special_bonus_total_cells)})"
+        else:
+            quarter_special_cell.value = round(total_bonus_special_hours_quarter, 2)
+        quarter_special_cell.number_format = "0.00"
         for cell in ws[current_row]:
             cell.font = Font(bold=True)
         current_row += 1
@@ -564,6 +684,7 @@ def build_quarterly_report(
         ws.column_dimensions['E'].width = 12
         ws.column_dimensions['F'].width = 12
         ws.column_dimensions['G'].width = 8
+        ws.column_dimensions['H'].width = 16
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
@@ -616,3 +737,6 @@ __all__ = [
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]
+
+
+
