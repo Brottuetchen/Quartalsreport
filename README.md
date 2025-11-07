@@ -26,7 +26,6 @@ Webdienst auf Basis von FastAPI zur Erstellung quartalsweiser Bonusberichte aus 
 - Automatische Quartalsauswahl oder explizite Vorgabe (z. B. `Q3-2025`).
 - Erstellung einer `.xlsx`-Mappe mit Monatsübersichten, Bonus-Anpassungsfeldern und separater Sonderprojekt-Summe.
 - **Deckblatt mit Gesamtübersicht**: Automatisch generiertes Übersichtsblatt mit dynamischen Summen aller Mitarbeiter.
-- **PDF-Export**: Jedes Arbeitsblatt kann als separates PDF exportiert werden (benötigt LibreOffice).
 - Generierte Werte per Übertragshilfe einfach in die Firmenvorlage kopieren.
 - Bereitstellung per Docker-Container, optional mit HTTP Basic Auth.
 - Windows-Skripte für den portablen Offline-Einsatz.
@@ -113,8 +112,6 @@ Danach <http://localhost:9999> im Browser öffnen.
 | POST    | `/api/jobs`                       | Job mit `csv_file`, `xml_file`, optional `quarter` anlegen |
 | GET     | `/api/jobs/{job_id}`              | Status und Fortschritt abrufen                             |
 | GET     | `/api/jobs/{job_id}/download`     | Fertige Excel herunterladen (Status `finished`)            |
-| POST    | `/api/jobs/{job_id}/export-pdf`   | Alle Arbeitsblätter als PDFs exportieren                   |
-| GET     | `/api/jobs/{job_id}/pdf/{filename}` | Einzelnes generiertes PDF herunterladen                  |
 | DELETE  | `/api/jobs/{job_id}`              | Job löschen (falls nicht in Bearbeitung)                   |
 | GET     | `/healthz`                        | Gesundheitscheck                                           |
 
@@ -145,17 +142,6 @@ Für jeden Mitarbeiter des gewählten Quartals:
 5. **Übertragshilfe**: Tabelle `Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`.
 
 Dateien liegen nach Fertigstellung unter `data/jobs/<job-id>/Q{Quartal}-{Jahr}.xlsx`.
-
-### PDF-Export
-
-Nach der Generierung der Excel-Datei können alle Arbeitsblätter als separate PDF-Dateien exportiert werden:
-
-- Über die Weboberfläche: Button "Als PDFs exportieren" nach erfolgreichem Report
-- Über die API: `POST /api/jobs/{job_id}/export-pdf`
-- Jedes PDF wird benannt als: `{Arbeitsblattname}_{Dateiname}.pdf`
-- Download einzelner PDFs: `GET /api/jobs/{job_id}/pdf/{pdf_filename}`
-
-**Voraussetzung**: LibreOffice muss installiert sein (im Docker-Image bereits enthalten).
 
 ---
 
