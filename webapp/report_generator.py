@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import math
 import re
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -18,7 +21,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 # ===================== BUDGETS FÜR 0000-PROJEKT =====================
@@ -260,6 +263,133 @@ def determine_quarter(df_xml: pd.DataFrame, requested: Optional[str] = None) -> 
     return QuarterSelection(period=target, months=months)
 
 
+def _create_cover_sheet(
+    wb: Workbook,
+    target_quarter: pd.Period,
+    months: Iterable[pd.Period],
+    employee_summary_data: Dict,
+    border: Border,
+) -> None:
+    """Creates a cover sheet with summary totals across all employees."""
+
+    # Create summary sheet
+    ws = wb.create_sheet(title="Übersicht", index=0)
+
+    # Title
+    ws.append([f"Quartalsübersicht {target_quarter} - Zusammenfassung aller Mitarbeiter"])
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+
+    current_row = 3
+
+    # Monthly summary table
+    ws.append(["--- Monatliche Summen ---"])
+    ws[f"A{current_row}"].font = Font(bold=True, size=12)
+    current_row += 1
+
+    # Header row
+    ws.append(["Monat", "Gesamtstunden", "Bonusberechtigte Stunden", "Bonusberechtigte Stunden Sonderprojekt"])
+    for cell in ws[current_row]:
+        cell.font = Font(bold=True)
+        cell.border = border
+    current_row += 1
+
+    # Get all months from first employee (all employees should have same months)
+    if employee_summary_data:
+        first_emp = list(employee_summary_data.keys())[0]
+        month_labels = list(employee_summary_data[first_emp]['months'].keys())
+
+        # For each month, create a summary row
+        for month_label in month_labels:
+            # Collect cell references for all employees for this month
+            total_hours_refs = []
+            bonus_hours_refs = []
+            special_bonus_refs = []
+
+            for emp, emp_data in employee_summary_data.items():
+                if month_label in emp_data['months']:
+                    month_data = emp_data['months'][month_label]
+                    total_hours_refs.append(month_data['total_hours_cell'])
+                    bonus_hours_refs.append(month_data['bonus_hours_cell'])
+                    special_bonus_refs.append(month_data['special_bonus_hours_cell'])
+
+            # Create formulas summing across all employees
+            total_hours_formula = f"=SUM({','.join(total_hours_refs)})" if total_hours_refs else "0"
+            bonus_hours_formula = f"=SUM({','.join(bonus_hours_refs)})" if bonus_hours_refs else "0"
+            special_bonus_formula = f"=SUM({','.join(special_bonus_refs)})" if special_bonus_refs else "0"
+
+            ws.append([month_label, total_hours_formula, bonus_hours_formula, special_bonus_formula])
+            for cell in ws[current_row]:
+                cell.border = border
+                if cell.column > 1:  # Format numeric columns
+                    cell.number_format = "0.00"
+            current_row += 1
+
+    ws.append([])
+    current_row += 1
+
+    # Quarterly summary
+    ws.append(["--- Quartalssummen ---"])
+    ws[f"A{current_row}"].font = Font(bold=True, size=12)
+    current_row += 1
+
+    # Collect quarterly total cell references from all employees
+    quarter_total_refs = []
+    quarter_bonus_refs = []
+    quarter_special_refs = []
+
+    for emp, emp_data in employee_summary_data.items():
+        if 'quarter_total_hours_cell' in emp_data:
+            quarter_total_refs.append(emp_data['quarter_total_hours_cell'])
+        if 'quarter_bonus_hours_cell' in emp_data:
+            quarter_bonus_refs.append(emp_data['quarter_bonus_hours_cell'])
+        if 'quarter_special_bonus_hours_cell' in emp_data:
+            quarter_special_refs.append(emp_data['quarter_special_bonus_hours_cell'])
+
+    # Total hours
+    ws.append(["Gesamt eingetragene Stunden:", f"=SUM({','.join(quarter_total_refs)})" if quarter_total_refs else "0"])
+    ws[f"B{current_row}"].number_format = "0.00"
+    for cell in ws[current_row]:
+        cell.font = Font(bold=True)
+        cell.border = border
+    current_row += 1
+
+    # Bonus hours
+    ws.append(["Bonusberechtigte Stunden (Quartal):", f"=SUM({','.join(quarter_bonus_refs)})" if quarter_bonus_refs else "0"])
+    ws[f"B{current_row}"].number_format = "0.00"
+    for cell in ws[current_row]:
+        cell.font = Font(bold=True)
+        cell.border = border
+    current_row += 1
+
+    # Special bonus hours
+    ws.append(["Bonusberechtigte Stunden Sonderprojekt (Quartal):", f"=SUM({','.join(quarter_special_refs)})" if quarter_special_refs else "0"])
+    ws[f"B{current_row}"].number_format = "0.00"
+    for cell in ws[current_row]:
+        cell.font = Font(bold=True)
+        cell.border = border
+    current_row += 1
+
+    ws.append([])
+    current_row += 1
+
+    # Employee list
+    ws.append(["--- Mitarbeiter in diesem Quartal ---"])
+    ws[f"A{current_row}"].font = Font(bold=True, size=12)
+    current_row += 1
+
+    for emp in sorted(employee_summary_data.keys()):
+        ws.append([emp])
+        ws[f"A{current_row}"].border = border
+        current_row += 1
+
+    # Set column widths
+    ws.column_dimensions['A'].width = 50
+    ws.column_dimensions['B'].width = 20
+    ws.column_dimensions['C'].width = 25
+    ws.column_dimensions['D'].width = 35
+
+
 def build_quarterly_report(
     df_csv: pd.DataFrame,
     df_xml: pd.DataFrame,
@@ -280,11 +410,23 @@ def build_quarterly_report(
     employees = sorted(df_quarter["staff_name"].unique())
     total_emps = max(len(employees), 1)
 
+    # Dictionary to store cell references for summary sheet
+    employee_summary_data = {}
+
     for idx_emp, emp in enumerate(employees, start=1):
         ws = wb.create_sheet(title=emp[:31])
+        sheet_name = emp[:31]
         monthly_bonus_total_cells: List[str] = []
         monthly_special_bonus_total_cells: List[str] = []
         transfer_entries: List[Tuple[str, str, str, str]] = []
+
+        # Store monthly data for summary sheet
+        if emp not in employee_summary_data:
+            employee_summary_data[emp] = {
+                'sheet_name': sheet_name,
+                'months': {}
+            }
+
         ws.append([f"{emp} - Quartalsreport {target_quarter}"])
         ws.append([])
 
@@ -534,6 +676,13 @@ def build_quarterly_report(
 
             transfer_entries.append((month_str, sum_total_cell.coordinate, bonus_total_cell.coordinate, special_total_cell.coordinate))
 
+            # Store cell references for summary sheet
+            employee_summary_data[emp]['months'][month_str] = {
+                'total_hours_cell': f"'{sheet_name}'!{sum_total_cell.coordinate}",
+                'bonus_hours_cell': f"'{sheet_name}'!{bonus_total_cell.coordinate}",
+                'special_bonus_hours_cell': f"'{sheet_name}'!{special_total_cell.coordinate}"
+            }
+
             ws.append([])
             current_row += 1
 
@@ -677,6 +826,11 @@ def build_quarterly_report(
             cell.font = Font(bold=True)
         current_row += 1
 
+        # Store quarterly summary cell references
+        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 2}"
+        employee_summary_data[emp]['quarter_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_bonus_cell.coordinate}"
+        employee_summary_data[emp]['quarter_special_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_special_cell.coordinate}"
+
         ws.column_dimensions['A'].width = 40
         ws.column_dimensions['B'].width = 50
         ws.column_dimensions['C'].width = 8
@@ -688,6 +842,10 @@ def build_quarterly_report(
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
+
+    # Create summary cover sheet
+    progress_cb(96, "Erstelle Deckblatt")
+    _create_cover_sheet(wb, target_quarter, months, employee_summary_data, border)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
@@ -729,11 +887,127 @@ def generate_quarterly_report(
     return result
 
 
+def export_sheets_to_pdf(
+    excel_path: Path,
+    output_dir: Path,
+    progress_cb: ProgressCallback = _noop_progress,
+) -> List[Path]:
+    """
+    Exports each worksheet from an Excel file as a separate PDF.
+
+    Uses LibreOffice in headless mode for conversion. Each PDF is named
+    as "{sheet_name}_{original_filename}.pdf".
+
+    Args:
+        excel_path: Path to the Excel file
+        output_dir: Directory where PDFs should be saved
+        progress_cb: Progress callback function
+
+    Returns:
+        List of paths to generated PDF files
+
+    Raises:
+        RuntimeError: If LibreOffice is not found or conversion fails
+    """
+
+    # Check if LibreOffice is available
+    soffice_paths = [
+        "soffice",  # Linux/Mac if in PATH
+        "/usr/bin/soffice",  # Linux
+        "/usr/bin/libreoffice",  # Linux alternative
+        "C:\\Program Files\\LibreOffice\\program\\soffice.exe",  # Windows
+        "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",  # Windows 32-bit
+    ]
+
+    soffice_cmd = None
+    for path in soffice_paths:
+        if shutil.which(path) or Path(path).exists():
+            soffice_cmd = path
+            break
+
+    if not soffice_cmd:
+        raise RuntimeError(
+            "LibreOffice nicht gefunden. Bitte installieren Sie LibreOffice für die PDF-Export-Funktionalität.\n"
+            "Download: https://www.libreoffice.org/download/"
+        )
+
+    progress_cb(5, "Lade Excel-Datei")
+
+    # Load workbook to get sheet names
+    wb = load_workbook(excel_path, read_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated_pdfs = []
+
+    base_filename = excel_path.stem
+    total_sheets = len(sheet_names)
+
+    progress_cb(10, f"Exportiere {total_sheets} Arbeitsblätter")
+
+    # Create a temporary directory for intermediate files
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        for idx, sheet_name in enumerate(sheet_names, start=1):
+            progress = int(10 + (idx / total_sheets) * 80)
+            progress_cb(progress, f"Exportiere Blatt '{sheet_name}'")
+
+            # Create a temporary Excel file with only this sheet
+            temp_excel = temp_path / f"temp_{idx}.xlsx"
+            wb_temp = load_workbook(excel_path)
+
+            # Remove all sheets except the current one
+            for ws_name in wb_temp.sheetnames:
+                if ws_name != sheet_name:
+                    del wb_temp[ws_name]
+
+            wb_temp.save(temp_excel)
+            wb_temp.close()
+
+            # Convert to PDF using LibreOffice
+            try:
+                subprocess.run(
+                    [
+                        soffice_cmd,
+                        "--headless",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        str(temp_path),
+                        str(temp_excel),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"PDF-Konvertierung fehlgeschlagen für Blatt '{sheet_name}': {e.stderr.decode()}")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"PDF-Konvertierung für Blatt '{sheet_name}' hat zu lange gedauert")
+
+            # Rename and move the PDF to output directory
+            temp_pdf = temp_path / f"temp_{idx}.pdf"
+            if temp_pdf.exists():
+                # Sanitize sheet name for filename
+                safe_sheet_name = re.sub(r'[<>:"/\\|?*]', '_', sheet_name)
+                output_pdf = output_dir / f"{safe_sheet_name}_{base_filename}.pdf"
+                shutil.move(str(temp_pdf), str(output_pdf))
+                generated_pdfs.append(output_pdf)
+            else:
+                raise RuntimeError(f"PDF für Blatt '{sheet_name}' wurde nicht erstellt")
+
+    progress_cb(100, f"{len(generated_pdfs)} PDFs erfolgreich erstellt")
+    return generated_pdfs
+
+
 __all__ = [
     "generate_quarterly_report",
     "determine_quarter",
     "list_available_quarters",
     "parse_quarter",
+    "export_sheets_to_pdf",
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]

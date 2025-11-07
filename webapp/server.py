@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from .report_generator import generate_quarterly_report
+from .report_generator import generate_quarterly_report, export_sheets_to_pdf
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -269,6 +269,63 @@ async def job_download(job_id: str):
 
     filename = job.result_path.name
     return FileResponse(path=job.result_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/api/jobs/{job_id}/export-pdf", response_class=JSONResponse, dependencies=ROUTE_DEPENDENCIES)
+async def export_job_to_pdf(job_id: str):
+    """
+    Exports each worksheet of the job's Excel file to separate PDF files.
+    Returns a list of generated PDF filenames.
+    """
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nicht gefunden")
+    if job.status != "finished" or not job.result_path:
+        raise HTTPException(status_code=409, detail="Job ist noch nicht abgeschlossen")
+
+    pdf_output_dir = job.output_dir / "pdfs"
+
+    try:
+        # Create a simple progress callback that doesn't update job state
+        def pdf_progress(progress: int, message: str) -> None:
+            pass  # Could log or store separately if needed
+
+        generated_pdfs = export_sheets_to_pdf(
+            excel_path=job.result_path,
+            output_dir=pdf_output_dir,
+            progress_cb=pdf_progress,
+        )
+
+        # Return list of PDF filenames
+        pdf_filenames = [pdf.name for pdf in generated_pdfs]
+
+        return JSONResponse({
+            "status": "success",
+            "pdf_count": len(generated_pdfs),
+            "pdfs": pdf_filenames,
+            "message": f"{len(generated_pdfs)} PDFs erfolgreich erstellt",
+        })
+
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PDF-Export fehlgeschlagen: {str(exc)}")
+
+
+@app.get("/api/jobs/{job_id}/pdf/{pdf_filename}", dependencies=ROUTE_DEPENDENCIES)
+async def download_pdf(job_id: str, pdf_filename: str):
+    """
+    Downloads a specific PDF file that was generated for this job.
+    """
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nicht gefunden")
+
+    pdf_path = job.output_dir / "pdfs" / pdf_filename
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF-Datei nicht gefunden")
+
+    return FileResponse(path=pdf_path, filename=pdf_filename, media_type="application/pdf")
 
 
 @app.delete("/api/jobs/{job_id}", dependencies=ROUTE_DEPENDENCIES)

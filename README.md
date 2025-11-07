@@ -25,6 +25,8 @@ Webdienst auf Basis von FastAPI zur Erstellung quartalsweiser Bonusberichte aus 
 - CSV (Soll/Ist) und XML (Zeiterfassung) per Weboberfläche oder REST hochladen.
 - Automatische Quartalsauswahl oder explizite Vorgabe (z. B. `Q3-2025`).
 - Erstellung einer `.xlsx`-Mappe mit Monatsübersichten, Bonus-Anpassungsfeldern und separater Sonderprojekt-Summe.
+- **Deckblatt mit Gesamtübersicht**: Automatisch generiertes Übersichtsblatt mit dynamischen Summen aller Mitarbeiter.
+- **PDF-Export**: Jedes Arbeitsblatt kann als separates PDF exportiert werden (benötigt LibreOffice).
 - Generierte Werte per Übertragshilfe einfach in die Firmenvorlage kopieren.
 - Bereitstellung per Docker-Container, optional mit HTTP Basic Auth.
 - Windows-Skripte für den portablen Offline-Einsatz.
@@ -106,13 +108,15 @@ Danach <http://localhost:9999> im Browser öffnen.
 
 ## REST-API
 
-| Methode | Endpoint                      | Beschreibung                                                |
-|---------|-------------------------------|-------------------------------------------------------------|
-| POST    | `/api/jobs`                   | Job mit `csv_file`, `xml_file`, optional `quarter` anlegen |
-| GET     | `/api/jobs/{job_id}`          | Status und Fortschritt abrufen                             |
-| GET     | `/api/jobs/{job_id}/download` | Fertige Excel herunterladen (Status `finished`)            |
-| DELETE  | `/api/jobs/{job_id}`          | Job löschen (falls nicht in Bearbeitung)                   |
-| GET     | `/healthz`                    | Gesundheitscheck                                           |
+| Methode | Endpoint                           | Beschreibung                                                |
+|---------|-----------------------------------|-------------------------------------------------------------|
+| POST    | `/api/jobs`                       | Job mit `csv_file`, `xml_file`, optional `quarter` anlegen |
+| GET     | `/api/jobs/{job_id}`              | Status und Fortschritt abrufen                             |
+| GET     | `/api/jobs/{job_id}/download`     | Fertige Excel herunterladen (Status `finished`)            |
+| POST    | `/api/jobs/{job_id}/export-pdf`   | Alle Arbeitsblätter als PDFs exportieren                   |
+| GET     | `/api/jobs/{job_id}/pdf/{filename}` | Einzelnes generiertes PDF herunterladen                  |
+| DELETE  | `/api/jobs/{job_id}`              | Job löschen (falls nicht in Bearbeitung)                   |
+| GET     | `/healthz`                        | Gesundheitscheck                                           |
 
 Beispiel (PowerShell, `curl.exe`):
 
@@ -129,14 +133,29 @@ Akzeptierte Quartals-Formate: `Q3-2025`, `2025Q3`, `Q3/2025`, `2025-Q3`.
 
 ## Aufbau der generierten Excel-Dateien
 
+Die generierte Excel-Datei enthält:
+
+1. **Übersichtsblatt (Deckblatt)**: Zeigt monatliche und quartalsweise Summen über alle Mitarbeiter hinweg. Die Werte werden dynamisch über Formeln aus den Mitarbeiterblättern berechnet und aktualisieren sich automatisch bei Änderungen.
+
 Für jeden Mitarbeiter des gewählten Quartals:
 
-1. **Monatsbereiche** mit Soll/Ist, gebuchten Stunden, Farbkennzeichnung und der Spalte `Bonus-Anpassung (h)` für manuelle Korrekturen.
-2. **Monatssummen** (Gesamtstunden, Bonusstunden, Bonusstunden Sonderprojekt) mit automatischer Aktualisierung bei Anpassungen.
-3. **Quartalsübersicht** für Meilensteine mit Quartalssoll.
-4. **Übertragshilfe**: Tabelle `Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`.
+2. **Monatsbereiche** mit Soll/Ist, gebuchten Stunden, Farbkennzeichnung und der Spalte `Bonus-Anpassung (h)` für manuelle Korrekturen.
+3. **Monatssummen** (Gesamtstunden, Bonusstunden, Bonusstunden Sonderprojekt) mit automatischer Aktualisierung bei Anpassungen.
+4. **Quartalsübersicht** für Meilensteine mit Quartalssoll.
+5. **Übertragshilfe**: Tabelle `Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`.
 
 Dateien liegen nach Fertigstellung unter `data/jobs/<job-id>/Q{Quartal}-{Jahr}.xlsx`.
+
+### PDF-Export
+
+Nach der Generierung der Excel-Datei können alle Arbeitsblätter als separate PDF-Dateien exportiert werden:
+
+- Über die Weboberfläche: Button "Als PDFs exportieren" nach erfolgreichem Report
+- Über die API: `POST /api/jobs/{job_id}/export-pdf`
+- Jedes PDF wird benannt als: `{Arbeitsblattname}_{Dateiname}.pdf`
+- Download einzelner PDFs: `GET /api/jobs/{job_id}/pdf/{pdf_filename}`
+
+**Voraussetzung**: LibreOffice muss installiert sein (im Docker-Image bereits enthalten).
 
 ---
 
