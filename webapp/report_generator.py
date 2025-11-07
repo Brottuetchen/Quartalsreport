@@ -525,10 +525,12 @@ def build_quarterly_report(
 
                 for i, (_, row_data) in enumerate(proj_block.iterrows()):
                     ms_type = row_data["MeilensteinTyp"]
-                    typ_short = "Q" if ms_type == "quarterly" else "M"
-
                     hours_value = float(row_data.get("hours") or 0.0)
                     is_special_project = is_bonus_project(proj) or is_bonus_project(row_data.get("proj_norm", ""))
+                    if is_special_project:
+                        typ_short = "Q" if ms_type == "quarterly" else "M"
+                    else:
+                        typ_short = "G"
                     bonus_candidate = False
                     should_color = False
                     color_percentage = 0.0
