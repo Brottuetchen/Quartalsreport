@@ -7,6 +7,7 @@ Webdienst auf Basis von FastAPI zur Erstellung quartalsweiser Bonusberichte aus 
 ## Inhalt
 
 - [Funktionen](#funktionen)
+- [Benutzeranleitung](BENUTZERANLEITUNG.md) 📖
 - [Projektstruktur](#projektstruktur)
 - [Voraussetzungen](#voraussetzungen)
 - [Docker-Nutzung](#docker-nutzung)
