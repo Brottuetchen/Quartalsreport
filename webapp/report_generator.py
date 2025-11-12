@@ -123,6 +123,134 @@ def status_color_hex(p: float) -> str:
         return "F8CBAD"  # rot
 
 
+def detect_billing_type(arbeitspaket: str, honorarbereich: str) -> str:
+    """
+    Erkennt die Abrechnungsart eines Projekts/Meilensteins.
+    Returns: "Pauschale" | "Nachweis" | "Unbekannt"
+    """
+    if pd.isna(honorarbereich) or str(honorarbereich).strip().upper() != "X":
+        return "Unbekannt"  # Keine Obermeilenstein-Markierung
+
+    if pd.isna(arbeitspaket):
+        return "Unbekannt"
+
+    arbeitspaket_lower = str(arbeitspaket).lower()
+
+    # Pauschale erkennen: (p)
+    if "(p)" in arbeitspaket_lower:
+        return "Pauschale"
+
+    # Nachweis erkennen: (aN), (a.N.), (a N)
+    if any(marker in arbeitspaket_lower for marker in ["(an)", "(a.n.)", "(a n)"]):
+        return "Nachweis"
+
+    # Nicht eindeutig erkennbar
+    return "Unbekannt"
+
+
+def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
+    """
+    Lädt Budget-Informationen aus CSV für Projekt-Budget-Übersicht.
+    Returns DataFrame mit Projekten, Abrechnungsart und Budget-Daten.
+    """
+    try_encodings = [("utf-16", "\t"), ("utf-8-sig", "\t"), ("cp1252", "\t")]
+    df = None
+    for enc, delim in try_encodings:
+        try:
+            df = pd.read_csv(csv_path, delimiter=delim, encoding=enc)
+            break
+        except Exception:
+            continue
+    if df is None:
+        raise RuntimeError("CSV konnte nicht gelesen werden.")
+
+    df.columns = [c.strip().replace("\u200b", "").replace("\ufeff", "") for c in df.columns]
+    df["Projekte"] = df["Projekte"].ffill()
+
+    # Nur Obermeilensteine (X-Markierung) interessieren uns für Budget-Übersicht
+    mask_obermeilenstein = (
+        df["Honorarbereich"].notna() &
+        (df["Honorarbereich"].astype(str).str.strip().str.upper() == "X") &
+        df["Arbeitspaket"].notna() &
+        (df["Arbeitspaket"].astype(str).str.strip() != "-")
+    )
+
+    budget_rows = []
+
+    for idx, row in df[mask_obermeilenstein].iterrows():
+        projekt = str(row["Projekte"]).strip()
+        arbeitspaket = str(row["Arbeitspaket"]).strip()
+
+        # Abrechnungsart erkennen
+        billing_type = detect_billing_type(arbeitspaket, row["Honorarbereich"])
+
+        # Budget-Daten extrahieren
+        sollhonor = de_to_float(row.get("Sollhonorar", 0))
+        verrechnete_honorare = de_to_float(row.get("Verrechnete Honorare", 0))
+        istkosten = de_to_float(row.get("Istkosten", 0))
+        sollstunden = de_to_float(row.get("Sollstunden Budget", 0))
+        iststunden = de_to_float(row.get("Iststunden", 0))
+        budget = de_to_float(row.get("Budget", 0))
+
+        # Stundensätze für Positionen sammeln (aus Unterpositionen)
+        rate_sv = None
+        rate_cad = None
+        rate_adm = None
+
+        # Suche nach Unterpositionen mit SV/CAD/ADM
+        # Nächste Zeilen nach dem Obermeilenstein durchsuchen
+        for sub_idx in range(idx + 1, min(idx + 20, len(df))):
+            sub_row = df.iloc[sub_idx]
+            sub_arbeitspaket = str(sub_row.get("Arbeitspaket", ""))
+
+            # Prüfe ob es eine Unterposition ist (beginnt mit " und enthält ')
+            if not sub_arbeitspaket.startswith('"'):
+                break  # Nächster Obermeilenstein erreicht
+
+            # Extrahiere Position
+            if "'   SV" in sub_arbeitspaket or "'   S V" in sub_arbeitspaket:
+                sub_budget = de_to_float(sub_row.get("Budget", 0))
+                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                if sub_sollstunden > 0:
+                    rate_sv = sub_budget / sub_sollstunden
+            elif "'   CAD" in sub_arbeitspaket or "'   C A D" in sub_arbeitspaket:
+                sub_budget = de_to_float(sub_row.get("Budget", 0))
+                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                if sub_sollstunden > 0:
+                    rate_cad = sub_budget / sub_sollstunden
+            elif "'   ADM" in sub_arbeitspaket or "'   A D M" in sub_arbeitspaket:
+                sub_budget = de_to_float(sub_row.get("Budget", 0))
+                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                if sub_sollstunden > 0:
+                    rate_adm = sub_budget / sub_sollstunden
+
+        # Bei Pauschale: Berechne Stundensatz aus Sollhonor / Sollstunden
+        if billing_type == "Pauschale" and sollstunden > 0:
+            default_rate = sollhonor / sollstunden
+            if rate_sv is None:
+                rate_sv = default_rate
+            if rate_cad is None:
+                rate_cad = default_rate
+            if rate_adm is None:
+                rate_adm = default_rate
+
+        budget_rows.append({
+            "Projekt": projekt,
+            "Obermeilenstein": arbeitspaket,
+            "Abrechnungsart": billing_type,
+            "Gesamtbudget": sollhonor,
+            "Abgerechnet": verrechnete_honorare,
+            "Istkosten": istkosten,
+            "Sollstunden": sollstunden,
+            "Iststunden": iststunden,
+            "Stundensatz_SV": rate_sv,
+            "Stundensatz_CAD": rate_cad,
+            "Stundensatz_ADM": rate_adm,
+        })
+
+    return pd.DataFrame(budget_rows)
+
+
 def load_csv_projects(csv_path: Path) -> pd.DataFrame:
     """CSV laden (Soll/Ist-Basis)."""
 
@@ -262,6 +390,146 @@ def determine_quarter(df_xml: pd.DataFrame, requested: Optional[str] = None) -> 
     return QuarterSelection(period=target, months=months)
 
 
+def _create_project_budget_sheet(
+    wb: Workbook,
+    df_budget: pd.DataFrame,
+    border: Border,
+) -> None:
+    """Creates a project budget overview sheet with billing type and hourly rates."""
+
+    ws = wb.create_sheet(title="Projekt-Budget-Übersicht", index=0)
+
+    # Title
+    ws.append(["Projekt-Budget-Übersicht"])
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+    ws.append(["Hinweis: Rote Zellen = Manuelle Eingabe erforderlich | Gelbe Zellen = Optional manuell anpassen"])
+    ws["A3"].font = Font(italic=True, size=10)
+    ws.append([])
+
+    current_row = 5
+
+    # Header row
+    headers = [
+        "Projekt",
+        "Obermeilenstein",
+        "Abrechnungsart",
+        "Status",
+        "Gesamtbudget (€)",
+        "Abgerechnet (€)",
+        "Verfügbar (€)",
+        "Stundensatz SV (€/h)",
+        "Stundensatz CAD (€/h)",
+        "Stundensatz ADM (€/h)",
+        "Bemerkung"
+    ]
+    ws.append(headers)
+    for cell in ws[current_row]:
+        cell.font = Font(bold=True)
+        cell.border = border
+        cell.fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+        cell.font = Font(bold=True, color='FFFFFF')
+    current_row += 1
+
+    # Data rows
+    for _, row_data in df_budget.iterrows():
+        projekt = row_data["Projekt"]
+        obermeilenstein = row_data["Obermeilenstein"]
+        billing_type = row_data["Abrechnungsart"]
+        gesamtbudget = row_data["Gesamtbudget"]
+        abgerechnet = row_data["Abgerechnet"]
+        rate_sv = row_data["Stundensatz_SV"]
+        rate_cad = row_data["Stundensatz_CAD"]
+        rate_adm = row_data["Stundensatz_ADM"]
+
+        # Status berechnen
+        has_billing_type = billing_type != "Unbekannt"
+        has_rates = (
+            (rate_sv is not None and rate_sv > 0) or
+            (rate_cad is not None and rate_cad > 0) or
+            (rate_adm is not None and rate_adm > 0)
+        )
+
+        if has_billing_type and has_rates:
+            status = "✓ Vollständig"
+        else:
+            status = "⚠ Manual erforderlich"
+
+        # Verfügbar als Formel
+        verfuegbar_formula = f"=E{current_row}-F{current_row}"
+
+        # Bemerkung generieren
+        bemerkung = []
+        if not has_billing_type:
+            bemerkung.append("Abrechnungsart wählen")
+        if not has_rates:
+            bemerkung.append("Stundensätze eingeben")
+        bemerkung_text = "; ".join(bemerkung)
+
+        ws.append([
+            projekt,
+            obermeilenstein,
+            billing_type,
+            status,
+            gesamtbudget if gesamtbudget > 0 else "",
+            abgerechnet if abgerechnet > 0 else 0,
+            verfuegbar_formula,
+            rate_sv if rate_sv is not None else "",
+            rate_cad if rate_cad is not None else "",
+            rate_adm if rate_adm is not None else "",
+            bemerkung_text
+        ])
+
+        # Styling für die Zeile
+        for col_idx, cell in enumerate(ws[current_row], start=1):
+            cell.border = border
+
+            # Abrechnungsart Dropdown (Spalte C)
+            if col_idx == 3:
+                dv = DataValidation(type="list", formula1='"Pauschale,Nachweis,Unbekannt"', allow_blank=False)
+                dv.add(cell)
+                ws.add_data_validation(dv)
+
+                # Rot markieren wenn "Unbekannt"
+                if billing_type == "Unbekannt":
+                    cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                    cell.font = Font(color='9C0006', bold=True)
+
+            # Status Spalte (Spalte D)
+            if col_idx == 4:
+                if status.startswith("⚠"):
+                    cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+                    cell.font = Font(color='9C5700', bold=True)
+                else:
+                    cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                    cell.font = Font(color='006100', bold=True)
+
+            # Budget-Spalten (E, F, G)
+            if col_idx in [5, 6, 7]:
+                cell.number_format = '#,##0.00'
+
+            # Stundensatz-Spalten (H, I, J) - Gelb markieren wenn leer
+            if col_idx in [8, 9, 10]:
+                cell.number_format = '#,##0.00'
+                if cell.value == "":
+                    cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+
+        current_row += 1
+
+    # Column widths
+    ws.column_dimensions['A'].width = 50
+    ws.column_dimensions['B'].width = 50
+    ws.column_dimensions['C'].width = 18
+    ws.column_dimensions['D'].width = 20
+    ws.column_dimensions['E'].width = 18
+    ws.column_dimensions['F'].width = 18
+    ws.column_dimensions['G'].width = 18
+    ws.column_dimensions['H'].width = 22
+    ws.column_dimensions['I'].width = 22
+    ws.column_dimensions['J'].width = 22
+    ws.column_dimensions['K'].width = 40
+
+
 def _create_cover_sheet(
     wb: Workbook,
     target_quarter: pd.Period,
@@ -391,6 +659,7 @@ def _create_cover_sheet(
 
 def build_quarterly_report(
     df_csv: pd.DataFrame,
+    df_budget: pd.DataFrame,
     df_xml: pd.DataFrame,
     target_quarter: pd.Period,
     months: Iterable[pd.Period],
@@ -405,6 +674,37 @@ def build_quarterly_report(
     wb.remove(wb.active)
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Create Projekt-Budget-Übersicht sheet first
+    progress_cb(18, "Erstelle Projekt-Budget-Übersicht")
+    _create_project_budget_sheet(wb, df_budget, border)
+
+    # Create a lookup dict for budget data using df_budget (which has the Obermeilensteine with actual values)
+    # Store ONLY by project name (not project+milestone), as each Obermeilenstein has its own budget
+    # But we need to aggregate multiple Obermeilensteine per project to get total project budget
+    budget_lookup = {}
+
+    # Use df_budget which contains the Obermeilensteine data
+    # Group by Projekt and sum all Obermeilensteine for that project
+    for projekt_name, group in df_budget.groupby("Projekt"):
+        projekt = str(projekt_name).strip()
+        if projekt and projekt != "-" and projekt != "nan":
+            # Sum all Obermeilensteine budget values for this project
+            budget_data = {
+                "Budget": group["Gesamtbudget"].sum(),
+                "Sollhonorar": group["Gesamtbudget"].sum(),  # Sum of all Obermeilensteine
+                "Verrechnete_Honorare": group["Abgerechnet"].sum(),
+                "Istkosten": group["Istkosten"].sum(),
+            }
+            # Store with full project name
+            budget_lookup[projekt] = budget_data
+            # Also store with project code (first part before space) for flexible matching
+            parts = projekt.split(maxsplit=1)
+            if parts:
+                projekt_code = parts[0].strip()
+                # Only store if not already present or if this has higher values
+                if projekt_code not in budget_lookup or budget_lookup[projekt_code]["Sollhonorar"] < budget_data["Sollhonorar"]:
+                    budget_lookup[projekt_code] = budget_data
 
     employees = sorted(df_quarter["staff_name"].unique())
     total_emps = max(len(employees), 1)
@@ -450,9 +750,18 @@ def build_quarterly_report(
             }
 
         ws.append([f"{emp} - Quartalsreport {target_quarter}"])
+
+        # Position dropdown for employee
+        ws.append(["Position:", "SV"])  # Default: SV
+        position_cell = ws.cell(row=2, column=2)
+        position_dv = DataValidation(type="list", formula1='"SV,CAD,ADM,Pauschale,-"', allow_blank=False)
+        position_dv.add(position_cell)
+        ws.add_data_validation(position_dv)
+        ws.cell(row=2, column=1).font = Font(bold=True)
+
         ws.append([])
 
-        current_row = 3
+        current_row = 4
         total_hours_all_months = 0.0
         total_bonus_hours_quarter = 0.0
         total_bonus_special_hours_quarter = 0.0
@@ -544,7 +853,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Budget Ist (€)", "Budget Erwirtschaftet (€)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -612,6 +921,11 @@ def build_quarterly_report(
                             None,  # Differenz (I) - will be filled with formula
                             None,  # Zuordnen an (J) - Dropdown will be added later
                             None,  # Von anderen (K) - will be filled with formula
+                            None,  # Stundensatz (L) - Formula will be added later
+                            None,  # Umsatz (M) - Formula will be added later
+                            None,  # Budget Gesamt (N) - Formula will be added later
+                            None,  # Budget Ist (O) - From CSV
+                            None,  # Budget Erwirtschaftet (P) - Formula will be added later
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -633,6 +947,11 @@ def build_quarterly_report(
                             None,  # Differenz (I) - will be filled with formula
                             None,  # Zuordnen an (J) - Dropdown will be added later
                             None,  # Von anderen (K) - will be filled with formula
+                            None,  # Stundensatz (L) - Formula will be added later
+                            None,  # Umsatz (M) - Formula will be added later
+                            None,  # Budget Gesamt (N) - Formula will be added later
+                            None,  # Budget Ist (O) - From CSV
+                            None,  # Budget Erwirtschaftet (P) - Formula will be added later
                         ])
 
                     for cell in ws[current_row]:
@@ -677,6 +996,61 @@ def build_quarterly_report(
                     # Mark this cell with row info for later formula injection
                     from_others_cell.value = 0  # Placeholder, will be replaced with formula
 
+                    # Stundensatz cell (column L) - VLOOKUP formula to Projekt-Budget-Übersicht
+                    # Uses Position from B2 (employee position dropdown)
+                    rate_cell = ws.cell(row=current_row, column=12)
+                    rate_cell.number_format = '#,##0.00'
+                    # Formula depends on Position dropdown in B2: IF B2="-" then "", ELSE VLOOKUP
+                    # Returns the corresponding rate (SV=H, CAD=I, ADM=J, Pauschale=H as fallback)
+                    # Uses TRIM to remove extra spaces and make matching more robust
+                    rate_formula = (
+                        f'=IF($B$2="-","",IF($B$2="Pauschale",'
+                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$H:$H,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
+                        f'IF($B$2="SV",'
+                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$H:$H,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
+                        f'IF($B$2="CAD",'
+                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$I:$I,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
+                        f'IF($B$2="ADM",'
+                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$J:$J,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
+                        f'0)))))'
+                    )
+                    rate_cell.value = rate_formula
+
+                    # Umsatz cell (column M) - Formula: Stundensatz * (Monat + Differenz + Von anderen)
+                    revenue_cell = ws.cell(row=current_row, column=13)
+                    revenue_cell.number_format = '#,##0.00'
+                    revenue_formula = f'=IF($B$2="-","",L{current_row}*(F{current_row}+I{current_row}+K{current_row}))'
+                    revenue_cell.value = revenue_formula
+
+                    # Budget Gesamt cell (column N) - Get from budget_lookup
+                    budget_total_cell = ws.cell(row=current_row, column=14)
+                    budget_total_cell.number_format = '#,##0.00'
+                    projekt_name = row_data["proj_norm"]
+                    if projekt_name in budget_lookup:
+                        # Use Sollhonorar as total budget
+                        budget_total = budget_lookup[projekt_name].get("Sollhonorar", 0)
+                        budget_total_cell.value = budget_total if budget_total > 0 else ""
+                    else:
+                        budget_total_cell.value = ""
+
+                    # Budget Ist cell (column O) - From CSV data (Istkosten)
+                    budget_ist_cell = ws.cell(row=current_row, column=15)
+                    budget_ist_cell.number_format = '#,##0.00'
+                    if projekt_name in budget_lookup:
+                        istkosten = budget_lookup[projekt_name].get("Istkosten", 0)
+                        budget_ist_cell.value = istkosten if istkosten > 0 else ""
+                    else:
+                        budget_ist_cell.value = ""
+
+                    # Budget Erwirtschaftet cell (column P) - Verrechnete Honorare from CSV
+                    budget_earned_cell = ws.cell(row=current_row, column=16)
+                    budget_earned_cell.number_format = '#,##0.00'
+                    if projekt_name in budget_lookup:
+                        verrechnete = budget_lookup[projekt_name].get("Verrechnete_Honorare", 0)
+                        budget_earned_cell.value = verrechnete if verrechnete > 0 else ""
+                    else:
+                        budget_earned_cell.value = ""
+
                     # Track row for this project/milestone/month combination
                     track_key = (row_data["proj_norm"], row_data["ms_norm"], month)
                     row_assignments[emp][track_key] = current_row
@@ -718,7 +1092,7 @@ def build_quarterly_report(
             sum_total_cell.value = round(sum_hours, 2)
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", ""])
+            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
             bonus_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -744,7 +1118,7 @@ def build_quarterly_report(
             total_bonus_hours_quarter += bonus_hours_month
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", "", "", ""])
+            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
             special_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -771,7 +1145,7 @@ def build_quarterly_report(
             current_row += 1
 
             # Zugeordnete Stunden von anderen MA - will be calculated with formula
-            ws.append(["", "Zugeordnete Stunden von anderen MA", "", "", "", 0, "", "", "", "", ""])
+            ws.append(["", "Zugeordnete Stunden von anderen MA", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
             assigned_from_others_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -967,6 +1341,11 @@ def build_quarterly_report(
         ws.column_dimensions['I'].width = 12  # Differenz
         ws.column_dimensions['J'].width = 25  # Zuordnen an (Dropdown)
         ws.column_dimensions['K'].width = 15  # Von anderen
+        ws.column_dimensions['L'].width = 18  # Stundensatz (€/h)
+        ws.column_dimensions['M'].width = 15  # Umsatz (€)
+        ws.column_dimensions['N'].width = 18  # Budget Gesamt (€)
+        ws.column_dimensions['O'].width = 15  # Budget Ist (€)
+        ws.column_dimensions['P'].width = 22  # Budget Erwirtschaftet (€)
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
@@ -1027,6 +1406,9 @@ def generate_quarterly_report(
     progress_cb(5, "Lade CSV-Daten")
     df_csv = load_csv_projects(csv_path)
 
+    progress_cb(8, "Lade Budget-Daten")
+    df_budget = load_csv_budget_data(csv_path)
+
     progress_cb(10, "Lade XML-Daten")
     df_xml = load_xml_times(xml_path)
 
@@ -1039,6 +1421,7 @@ def generate_quarterly_report(
 
     result = build_quarterly_report(
         df_csv=df_csv,
+        df_budget=df_budget,
         df_xml=df_xml,
         target_quarter=selection.period,
         months=selection.months,
