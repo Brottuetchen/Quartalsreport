@@ -499,18 +499,11 @@ def build_quarterly_report(
 
             month_data["QuartalsSoll"] = month_data.apply(_compute_month_qsoll, axis=1)
 
-            # Cumulative XML hours up to current month
-            df_to_date = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] <= month)]
-            cum_hours_map = {
+            # XML hours for months AFTER the current month (for backward calculation)
+            df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
+            future_hours_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
-                for _, r in df_to_date.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
-            }
-
-            # Total XML hours for entire quarter (for proportional calculation)
-            df_quarter_emp = df_quarter[df_quarter["staff_name"] == emp]
-            total_xml_hours_map = {
-                (r["proj_norm"], r["ms_norm"]): r["hours"]
-                for _, r in df_quarter_emp.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
+                for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
@@ -553,21 +546,14 @@ def build_quarterly_report(
                         soll_value = float(row_data.get("Soll") or 0.0)
                         csv_ist_total = float(row_data.get("Ist") or 0.0)
 
-                        # Calculate cumulative IST from CSV IST proportional to XML distribution
-                        # IST_month = (XML_cumulative_to_month / XML_total_quarter) × CSV_IST
+                        # Calculate IST by subtracting future months from CSV IST (backward calculation)
+                        # Last month: IST = CSV_IST
+                        # Previous months: IST = CSV_IST - XML_hours_of_future_months
                         key = (row_data["proj_norm"], row_data["ms_norm"])
-                        xml_cum_hours = float(cum_hours_map.get(key, 0.0))
-                        xml_total_hours = float(total_xml_hours_map.get(key, 0.0))
+                        xml_future_hours = float(future_hours_map.get(key, 0.0))
 
-                        if xml_total_hours > 0:
-                            # Calculate proportional IST based on CSV total and XML distribution
-                            ist_display = (xml_cum_hours / xml_total_hours) * csv_ist_total
-                        elif csv_ist_total > 0:
-                            # No XML data but have CSV IST - use CSV value
-                            ist_display = csv_ist_total
-                        else:
-                            # No data at all
-                            ist_display = xml_cum_hours
+                        # IST at end of current month = CSV IST - all future XML hours
+                        ist_display = csv_ist_total - xml_future_hours
 
                         if soll_value > 0:
                             pct_value = (ist_display / soll_value) * 100.0 if soll_value else 0.0
