@@ -469,7 +469,6 @@ def build_quarterly_report(
                     if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS:
                         # Cumulative SOLL for monthly budgets: budget × month_index
                         month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
-                        month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             for idx in month_data.index:
                 ms_name = month_data.loc[idx, "Meilenstein"]
@@ -479,7 +478,6 @@ def build_quarterly_report(
                 if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS and (is_bonus_project(proj_name) or is_bonus_project(proj_norm)):
                     # Cumulative SOLL for monthly budgets: budget × month_index
                     month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
-                    month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             def _compute_month_qsoll(row):
                 if row.get("MeilensteinTyp") != "quarterly":
@@ -499,12 +497,28 @@ def build_quarterly_report(
 
             month_data["QuartalsSoll"] = month_data.apply(_compute_month_qsoll, axis=1)
 
+            # Calculate XML hour maps for IST calculation
+            df_quarter_emp = df_quarter[df_quarter["staff_name"] == emp]
+
+            # Total XML hours for entire quarter (used as "CSV IST" for 0000-projects)
+            quarter_xml_totals = {
+                (r["proj_norm"], r["ms_norm"]): r["hours"]
+                for _, r in df_quarter_emp.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
+            }
+
             # XML hours for months AFTER the current month (for backward calculation)
-            df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
+            df_after_month = df_quarter_emp[df_quarter_emp["period"] > month]
             future_hours_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
                 for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
+
+            # Update IST for 0000-projects to use quarter XML totals
+            for idx in month_data.index:
+                if month_data.loc[idx, "Ist"] == 0.0:
+                    key = (month_data.loc[idx, "proj_norm"], month_data.loc[idx, "ms_norm"])
+                    if key in quarter_xml_totals:
+                        month_data.loc[idx, "Ist"] = quarter_xml_totals[key]
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
 
