@@ -503,11 +503,12 @@ def build_quarterly_report(
                 for _, r in df_to_date.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
 
-            # XML hours for months AFTER the current month (for backward calculation on monthly milestones)
-            df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
-            future_hours_map = {
+            # XML hours for months AFTER the current month - FOR ALL EMPLOYEES (for backward calculation)
+            # This ensures all employees see the same IST value for the same project/milestone
+            df_after_month_all_employees = df_quarter[df_quarter["period"] > month]
+            future_hours_all_employees_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
-                for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
+                for _, r in df_after_month_all_employees.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
@@ -556,11 +557,12 @@ def build_quarterly_report(
                             ist_display = hours_value
                         else:
                             # For normal projects: backward calculation from CSV IST
+                            # Using ALL EMPLOYEES' future hours to ensure consistent IST across all employees
                             # Last month: IST = CSV_IST
-                            # Previous months: IST = CSV_IST - XML_hours_of_future_months
+                            # Previous months: IST = CSV_IST - XML_hours_of_future_months_ALL_EMPLOYEES
                             key = (row_data["proj_norm"], row_data["ms_norm"])
-                            xml_future_hours = float(future_hours_map.get(key, 0.0))
-                            ist_display = csv_ist_total - xml_future_hours
+                            xml_future_hours_all = float(future_hours_all_employees_map.get(key, 0.0))
+                            ist_display = csv_ist_total - xml_future_hours_all
 
                         if soll_value > 0:
                             pct_value = (ist_display / soll_value) * 100.0 if soll_value else 0.0
