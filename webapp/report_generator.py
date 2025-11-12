@@ -508,7 +508,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -557,6 +557,7 @@ def build_quarterly_report(
                             round(hours_value, 2),
                             round(pct_value, 2),
                             None,
+                            None,  # Differenz column - will be filled with formula
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -575,17 +576,24 @@ def build_quarterly_report(
                             round(hours_value, 2),
                             round(prozent, 2) if q_soll > 0 else "-",
                             None,
+                            None,  # Differenz column - will be filled with formula
                         ])
 
                     for cell in ws[current_row]:
                         cell.border = border
 
+                    # Bonus-Anpassung cell (column H)
                     adj_cell = ws.cell(row=current_row, column=8)
                     if is_special_project:
                         adjustment_cells_special.append(adj_cell.coordinate)
                     else:
                         adjustment_cells_regular.append(adj_cell.coordinate)
                     adj_cell.number_format = "0.00"
+
+                    # Differenz cell (column I) - Formula: F - H
+                    diff_cell = ws.cell(row=current_row, column=9)
+                    diff_cell.value = f"=F{current_row}-H{current_row}"
+                    diff_cell.number_format = "0.00"
 
                     if should_color:
                         pct_cell = ws.cell(row=current_row, column=7)
@@ -611,7 +619,7 @@ def build_quarterly_report(
 
             sum_hours = month_data["hours"].sum()
             total_hours_all_months += sum_hours
-            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", ""])
+            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", "", ""])
             sum_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -621,7 +629,7 @@ def build_quarterly_report(
             sum_total_cell.value = round(sum_hours, 2)
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", ""])
+            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", ""])
             bonus_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -647,7 +655,7 @@ def build_quarterly_report(
             total_bonus_hours_quarter += bonus_hours_month
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", ""])
+            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", ""])
             special_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -838,6 +846,7 @@ def build_quarterly_report(
         ws.column_dimensions['F'].width = 12
         ws.column_dimensions['G'].width = 8
         ws.column_dimensions['H'].width = 16
+        ws.column_dimensions['I'].width = 12
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
