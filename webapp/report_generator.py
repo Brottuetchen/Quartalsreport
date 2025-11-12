@@ -544,7 +544,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Zuordnen an", "Differenz (h)", "Von anderen (h)"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -609,8 +609,8 @@ def build_quarterly_report(
                             round(hours_value, 2),
                             round(pct_value, 2),
                             None,  # Bonus-Anpassung (H)
-                            None,  # Zuordnen an (I) - Dropdown will be added later
-                            None,  # Differenz (J) - will be filled with formula
+                            None,  # Differenz (I) - will be filled with formula
+                            None,  # Zuordnen an (J) - Dropdown will be added later
                             None,  # Von anderen (K) - will be filled with formula
                         ])
                     else:
@@ -630,8 +630,8 @@ def build_quarterly_report(
                             round(hours_value, 2),
                             round(prozent, 2) if q_soll > 0 else "-",
                             None,  # Bonus-Anpassung (H)
-                            None,  # Zuordnen an (I) - Dropdown will be added later
-                            None,  # Differenz (J) - will be filled with formula
+                            None,  # Differenz (I) - will be filled with formula
+                            None,  # Zuordnen an (J) - Dropdown will be added later
                             None,  # Von anderen (K) - will be filled with formula
                         ])
 
@@ -646,8 +646,13 @@ def build_quarterly_report(
                         adjustment_cells_regular.append(adj_cell.coordinate)
                     adj_cell.number_format = "0.00"
 
-                    # Zuordnen an cell (column I) - Dropdown with other employees on same project/milestone
-                    assign_cell = ws.cell(row=current_row, column=9)
+                    # Differenz cell (column I) - Formula: F - H (only show if H != 0)
+                    diff_cell = ws.cell(row=current_row, column=9)
+                    diff_cell.value = f"=IF(H{current_row}=0,\"\",F{current_row}-H{current_row})"
+                    diff_cell.number_format = "0.00"
+
+                    # Zuordnen an cell (column J) - Dropdown with other employees on same project/milestone
+                    assign_cell = ws.cell(row=current_row, column=10)
                     key = (row_data["proj_norm"], row_data["ms_norm"])
                     other_employees = [e for e in project_milestone_employees.get(key, []) if e != emp]
                     if other_employees:
@@ -656,11 +661,6 @@ def build_quarterly_report(
                         dv = DataValidation(type="list", formula1=f'"{employee_list}"', allow_blank=True)
                         dv.add(assign_cell)
                         ws.add_data_validation(dv)
-
-                    # Differenz cell (column J) - Formula: F - H (only show if H != 0)
-                    diff_cell = ws.cell(row=current_row, column=10)
-                    diff_cell.value = f"=IF(H{current_row}=0,\"\",F{current_row}-H{current_row})"
-                    diff_cell.number_format = "0.00"
 
                     # Add conditional formatting to turn cell red when negative
                     red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
@@ -964,8 +964,8 @@ def build_quarterly_report(
         ws.column_dimensions['F'].width = 12
         ws.column_dimensions['G'].width = 8
         ws.column_dimensions['H'].width = 16
-        ws.column_dimensions['I'].width = 25  # Zuordnen an (Dropdown)
-        ws.column_dimensions['J'].width = 12  # Differenz
+        ws.column_dimensions['I'].width = 12  # Differenz
+        ws.column_dimensions['J'].width = 25  # Zuordnen an (Dropdown)
         ws.column_dimensions['K'].width = 15  # Von anderen
 
         progress = int((idx_emp / total_emps) * 80) + 20
@@ -986,8 +986,8 @@ def build_quarterly_report(
                 if other_key in row_assignments[other_emp]:
                     other_row = row_assignments[other_emp][other_key]
                     other_sheet = other_emp[:31]
-                    # Add SUMIF formula part: IF assign cell (I) = current emp, then add diff cell (J)
-                    formula_parts.append(f"IF('{other_sheet}'!I{other_row}=\"{emp}\",'{other_sheet}'!J{other_row},0)")
+                    # Add SUMIF formula part: IF assign cell (J) = current emp, then add diff cell (I)
+                    formula_parts.append(f"IF('{other_sheet}'!J{other_row}=\"{emp}\",'{other_sheet}'!I{other_row},0)")
 
             # Set the formula in "Von anderen" cell (column K)
             from_others_cell = ws.cell(row=row_num, column=11)
