@@ -433,10 +433,7 @@ def build_quarterly_report(
         total_bonus_hours_quarter = 0.0
         total_bonus_special_hours_quarter = 0.0
 
-        # Convert months to list for indexing
-        months_list = list(months)
-
-        for month_idx, month in enumerate(months_list, start=1):
+        for month in months:
             df_month = df_quarter[(df_quarter["period"] == month) & (df_quarter["staff_name"] == emp)].copy()
 
             if df_month.empty:
@@ -467,8 +464,8 @@ def build_quarterly_report(
                     ms_type = month_data.loc[idx, "MeilensteinTyp"]
 
                     if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS:
-                        # Cumulative SOLL for monthly budgets: budget × month_index
-                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
+                        # Monthly budget (NOT cumulative - each month has its own budget)
+                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
                         month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             for idx in month_data.index:
@@ -477,8 +474,8 @@ def build_quarterly_report(
                 proj_name = month_data.loc[idx, "Projekte"]
                 proj_norm = month_data.loc[idx, "proj_norm"] if "proj_norm" in month_data.columns else ""
                 if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS and (is_bonus_project(proj_name) or is_bonus_project(proj_norm)):
-                    # Cumulative SOLL for monthly budgets: budget × month_index
-                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
+                    # Monthly budget (NOT cumulative - each month has its own budget)
+                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
                     month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             def _compute_month_qsoll(row):
@@ -499,10 +496,11 @@ def build_quarterly_report(
 
             month_data["QuartalsSoll"] = month_data.apply(_compute_month_qsoll, axis=1)
 
-            df_to_date = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] <= month)]
-            cum_hours_map = {
+            # XML hours for months AFTER the current month (for backward calculation)
+            df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
+            future_hours_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
-                for _, r in df_to_date.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
+                for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
@@ -543,11 +541,19 @@ def build_quarterly_report(
 
                     if ms_type == "monthly":
                         soll_value = float(row_data.get("Soll") or 0.0)
-                        # Use cumulative IST from XML up to current month
-                        cum_ist = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
-                        ist_display = cum_ist
+                        csv_ist_total = float(row_data.get("Ist") or 0.0)
+
+                        # Calculate IST by subtracting future months from CSV IST (backward calculation)
+                        # Last month: IST = CSV_IST
+                        # Previous months: IST = CSV_IST - XML_hours_of_future_months
+                        key = (row_data["proj_norm"], row_data["ms_norm"])
+                        xml_future_hours = float(future_hours_map.get(key, 0.0))
+
+                        # IST at end of current month = CSV IST - all future XML hours
+                        ist_display = csv_ist_total - xml_future_hours
+
                         if soll_value > 0:
-                            pct_value = (cum_ist / soll_value) * 100.0 if soll_value else 0.0
+                            pct_value = (ist_display / soll_value) * 100.0 if soll_value else 0.0
                             should_color = True
                             color_percentage = pct_value
                             if pct_value <= 100.0:
