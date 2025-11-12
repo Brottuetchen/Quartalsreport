@@ -148,10 +148,12 @@ def detect_billing_type(arbeitspaket: str, honorarbereich: str) -> str:
     return "Unbekannt"
 
 
-def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
+def load_csv_budget_data(csv_path: Path) -> tuple[pd.DataFrame, dict]:
     """
     Lädt Budget-Informationen aus CSV für Projekt-Budget-Übersicht.
-    Returns DataFrame mit Projekten, Abrechnungsart und Budget-Daten.
+    Returns:
+        - DataFrame mit Projekten, Abrechnungsart und Budget-Daten (pro Obermeilenstein)
+        - Dictionary mapping (Projekt, work_package_name) -> Obermeilenstein
     """
     try_encodings = [("utf-16", "\t"), ("utf-8-sig", "\t"), ("cp1252", "\t")]
     df = None
@@ -176,79 +178,111 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
     )
 
     budget_rows = []
+    # Mapping: (Projekt, work_package_name) -> Obermeilenstein
+    # This maps sub-items to their parent Obermeilenstein
+    work_package_to_obermeilenstein = {}
 
-    for idx, row in df[mask_obermeilenstein].iterrows():
-        projekt = str(row["Projekte"]).strip()
-        arbeitspaket = str(row["Arbeitspaket"]).strip()
+    current_projekt = None
+    current_obermeilenstein = None
 
-        # Abrechnungsart erkennen
-        billing_type = detect_billing_type(arbeitspaket, row["Honorarbereich"])
+    for idx, row in df.iterrows():
+        projekt = str(row["Projekte"]).strip() if pd.notna(row["Projekte"]) else current_projekt
+        arbeitspaket = str(row["Arbeitspaket"]).strip() if pd.notna(row["Arbeitspaket"]) else ""
+        honorarbereich = str(row["Honorarbereich"]).strip() if pd.notna(row["Honorarbereich"]) else ""
 
-        # Budget-Daten extrahieren
-        sollhonor = de_to_float(row.get("Sollhonorar", 0))
-        verrechnete_honorare = de_to_float(row.get("Verrechnete Honorare", 0))
-        istkosten = de_to_float(row.get("Istkosten", 0))
-        sollstunden = de_to_float(row.get("Sollstunden Budget", 0))
-        iststunden = de_to_float(row.get("Iststunden", 0))
-        budget = de_to_float(row.get("Budget", 0))
+        # Check if this is an Obermeilenstein
+        is_obermeilenstein = (
+            honorarbereich.upper() == "X" and
+            arbeitspaket and
+            arbeitspaket != "-"
+        )
 
-        # Stundensätze für Positionen sammeln (aus Unterpositionen)
-        rate_sv = None
-        rate_cad = None
-        rate_adm = None
+        if is_obermeilenstein:
+            current_projekt = projekt
+            current_obermeilenstein = arbeitspaket
 
-        # Suche nach Unterpositionen mit SV/CAD/ADM
-        # Nächste Zeilen nach dem Obermeilenstein durchsuchen
-        for sub_idx in range(idx + 1, min(idx + 20, len(df))):
-            sub_row = df.iloc[sub_idx]
-            sub_arbeitspaket = str(sub_row.get("Arbeitspaket", ""))
+            # Abrechnungsart erkennen
+            billing_type = detect_billing_type(arbeitspaket, row["Honorarbereich"])
 
-            # Prüfe ob es eine Unterposition ist (beginnt mit " und enthält ')
-            if not sub_arbeitspaket.startswith('"'):
-                break  # Nächster Obermeilenstein erreicht
+            # Budget-Daten extrahieren
+            sollhonor = de_to_float(row.get("Sollhonorar", 0))
+            verrechnete_honorare = de_to_float(row.get("Verrechnete Honorare", 0))
+            istkosten = de_to_float(row.get("Istkosten", 0))
+            sollstunden = de_to_float(row.get("Sollstunden Budget", 0))
+            iststunden = de_to_float(row.get("Iststunden", 0))
+            budget = de_to_float(row.get("Budget", 0))
 
-            # Extrahiere Position
-            if "'   SV" in sub_arbeitspaket or "'   S V" in sub_arbeitspaket:
-                sub_budget = de_to_float(sub_row.get("Budget", 0))
-                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
-                if sub_sollstunden > 0:
-                    rate_sv = sub_budget / sub_sollstunden
-            elif "'   CAD" in sub_arbeitspaket or "'   C A D" in sub_arbeitspaket:
-                sub_budget = de_to_float(sub_row.get("Budget", 0))
-                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
-                if sub_sollstunden > 0:
-                    rate_cad = sub_budget / sub_sollstunden
-            elif "'   ADM" in sub_arbeitspaket or "'   A D M" in sub_arbeitspaket:
-                sub_budget = de_to_float(sub_row.get("Budget", 0))
-                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
-                if sub_sollstunden > 0:
-                    rate_adm = sub_budget / sub_sollstunden
+            # Stundensätze für Positionen sammeln (aus Unterpositionen)
+            rate_sv = None
+            rate_cad = None
+            rate_adm = None
 
-        # Bei Pauschale: Berechne Stundensatz aus Sollhonor / Sollstunden
-        if billing_type == "Pauschale" and sollstunden > 0:
-            default_rate = sollhonor / sollstunden
-            if rate_sv is None:
-                rate_sv = default_rate
-            if rate_cad is None:
-                rate_cad = default_rate
-            if rate_adm is None:
-                rate_adm = default_rate
+            # Suche nach Unterpositionen mit SV/CAD/ADM
+            # Nächste Zeilen nach dem Obermeilenstein durchsuchen
+            for sub_idx in range(idx + 1, min(idx + 20, len(df))):
+                sub_row = df.iloc[sub_idx]
+                sub_arbeitspaket = str(sub_row.get("Arbeitspaket", ""))
 
-        budget_rows.append({
-            "Projekt": projekt,
-            "Obermeilenstein": arbeitspaket,
-            "Abrechnungsart": billing_type,
-            "Gesamtbudget": sollhonor,
-            "Abgerechnet": verrechnete_honorare,
-            "Istkosten": istkosten,
-            "Sollstunden": sollstunden,
-            "Iststunden": iststunden,
-            "Stundensatz_SV": rate_sv,
-            "Stundensatz_CAD": rate_cad,
-            "Stundensatz_ADM": rate_adm,
-        })
+                # Prüfe ob es eine Unterposition ist (beginnt mit " und enthält ')
+                if not sub_arbeitspaket.startswith('"'):
+                    break  # Nächster Obermeilenstein erreicht
 
-    return pd.DataFrame(budget_rows)
+                # Extrahiere Position
+                if "'   SV" in sub_arbeitspaket or "'   S V" in sub_arbeitspaket:
+                    sub_budget = de_to_float(sub_row.get("Budget", 0))
+                    sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                    if sub_sollstunden > 0:
+                        rate_sv = sub_budget / sub_sollstunden
+                elif "'   CAD" in sub_arbeitspaket or "'   C A D" in sub_arbeitspaket:
+                    sub_budget = de_to_float(sub_row.get("Budget", 0))
+                    sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                    if sub_sollstunden > 0:
+                        rate_cad = sub_budget / sub_sollstunden
+                elif "'   ADM" in sub_arbeitspaket or "'   A D M" in sub_arbeitspaket:
+                    sub_budget = de_to_float(sub_row.get("Budget", 0))
+                    sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                    if sub_sollstunden > 0:
+                        rate_adm = sub_budget / sub_sollstunden
+
+            # Bei Pauschale: Berechne Stundensatz aus Sollhonor / Sollstunden
+            if billing_type == "Pauschale" and sollstunden > 0:
+                default_rate = sollhonor / sollstunden
+                if rate_sv is None:
+                    rate_sv = default_rate
+                if rate_cad is None:
+                    rate_cad = default_rate
+                if rate_adm is None:
+                    rate_adm = default_rate
+
+            budget_rows.append({
+                "Projekt": projekt,
+                "Obermeilenstein": arbeitspaket,
+                "Abrechnungsart": billing_type,
+                "Gesamtbudget": sollhonor,
+                "Abgerechnet": verrechnete_honorare,
+                "Istkosten": istkosten,
+                "Sollstunden": sollstunden,
+                "Iststunden": iststunden,
+                "Stundensatz_SV": rate_sv,
+                "Stundensatz_CAD": rate_cad,
+                "Stundensatz_ADM": rate_adm,
+            })
+        elif current_obermeilenstein and arbeitspaket and arbeitspaket != "-":
+            # This is a sub-item (work package) under the current Obermeilenstein
+            # Clean up the work package name (remove leading quotes and special chars)
+            clean_arbeitspaket = arbeitspaket.lstrip('"').lstrip("'").strip()
+
+            # Store mapping: (Projekt, work_package) -> Obermeilenstein
+            if current_projekt and clean_arbeitspaket:
+                # Store with full work package name
+                work_package_to_obermeilenstein[(current_projekt, clean_arbeitspaket)] = current_obermeilenstein
+
+                # Also store with just the numeric prefix (e.g., "3100" from "3100-Erarbeiten...")
+                if "-" in clean_arbeitspaket:
+                    prefix = clean_arbeitspaket.split("-")[0].strip()
+                    work_package_to_obermeilenstein[(current_projekt, prefix)] = current_obermeilenstein
+
+    return pd.DataFrame(budget_rows), work_package_to_obermeilenstein
 
 
 def load_csv_projects(csv_path: Path) -> pd.DataFrame:
@@ -660,6 +694,7 @@ def _create_cover_sheet(
 def build_quarterly_report(
     df_csv: pd.DataFrame,
     df_budget: pd.DataFrame,
+    work_package_to_obermeilenstein: dict,
     df_xml: pd.DataFrame,
     target_quarter: pd.Period,
     months: Iterable[pd.Period],
@@ -679,32 +714,31 @@ def build_quarterly_report(
     progress_cb(18, "Erstelle Projekt-Budget-Übersicht")
     _create_project_budget_sheet(wb, df_budget, border)
 
-    # Create a lookup dict for budget data using df_budget (which has the Obermeilensteine with actual values)
-    # Store ONLY by project name (not project+milestone), as each Obermeilenstein has its own budget
-    # But we need to aggregate multiple Obermeilensteine per project to get total project budget
+    # Create a lookup dict for budget data keyed by (Projekt, Obermeilenstein)
+    # CRITICAL: Budgets are per Obermeilenstein, NOT summed across the project!
+    # Each Obermeilenstein has its own separate budget.
     budget_lookup = {}
 
-    # Use df_budget which contains the Obermeilensteine data
-    # Group by Projekt and sum all Obermeilensteine for that project
-    for projekt_name, group in df_budget.groupby("Projekt"):
-        projekt = str(projekt_name).strip()
-        if projekt and projekt != "-" and projekt != "nan":
-            # Sum all Obermeilensteine budget values for this project
+    # Store each Obermeilenstein's budget separately
+    for _, row in df_budget.iterrows():
+        projekt = str(row["Projekt"]).strip()
+        obermeilenstein = str(row["Obermeilenstein"]).strip()
+
+        if projekt and obermeilenstein and projekt != "-" and obermeilenstein != "-":
             budget_data = {
-                "Budget": group["Gesamtbudget"].sum(),
-                "Sollhonorar": group["Gesamtbudget"].sum(),  # Sum of all Obermeilensteine
-                "Verrechnete_Honorare": group["Abgerechnet"].sum(),
-                "Istkosten": group["Istkosten"].sum(),
+                "Sollhonorar": row["Gesamtbudget"],
+                "Verrechnete_Honorare": row["Abgerechnet"],
+                "Istkosten": row["Istkosten"],
             }
-            # Store with full project name
-            budget_lookup[projekt] = budget_data
-            # Also store with project code (first part before space) for flexible matching
+
+            # Store with (Projekt, Obermeilenstein) tuple as key
+            budget_lookup[(projekt, obermeilenstein)] = budget_data
+
+            # Also store with (Projekt_code, Obermeilenstein) for flexible matching
             parts = projekt.split(maxsplit=1)
             if parts:
                 projekt_code = parts[0].strip()
-                # Only store if not already present or if this has higher values
-                if projekt_code not in budget_lookup or budget_lookup[projekt_code]["Sollhonorar"] < budget_data["Sollhonorar"]:
-                    budget_lookup[projekt_code] = budget_data
+                budget_lookup[(projekt_code, obermeilenstein)] = budget_data
 
     employees = sorted(df_quarter["staff_name"].unique())
     total_emps = max(len(employees), 1)
@@ -1022,33 +1056,45 @@ def build_quarterly_report(
                     revenue_formula = f'=IF($B$2="-","",L{current_row}*(F{current_row}+I{current_row}+K{current_row}))'
                     revenue_cell.value = revenue_formula
 
-                    # Budget Gesamt cell (column N) - Get from budget_lookup
+                    # Budget cells (columns N, O, P) - Get from budget_lookup
+                    # CRITICAL: Budget is per Obermeilenstein, so we need to map work package -> Obermeilenstein
                     budget_total_cell = ws.cell(row=current_row, column=14)
                     budget_total_cell.number_format = '#,##0.00'
-                    projekt_name = row_data["proj_norm"]
-                    if projekt_name in budget_lookup:
-                        # Use Sollhonorar as total budget
-                        budget_total = budget_lookup[projekt_name].get("Sollhonorar", 0)
-                        budget_total_cell.value = budget_total if budget_total > 0 else ""
-                    else:
-                        budget_total_cell.value = ""
-
-                    # Budget Ist cell (column O) - From CSV data (Istkosten)
                     budget_ist_cell = ws.cell(row=current_row, column=15)
                     budget_ist_cell.number_format = '#,##0.00'
-                    if projekt_name in budget_lookup:
-                        istkosten = budget_lookup[projekt_name].get("Istkosten", 0)
-                        budget_ist_cell.value = istkosten if istkosten > 0 else ""
-                    else:
-                        budget_ist_cell.value = ""
-
-                    # Budget Erwirtschaftet cell (column P) - Verrechnete Honorare from CSV
                     budget_earned_cell = ws.cell(row=current_row, column=16)
                     budget_earned_cell.number_format = '#,##0.00'
-                    if projekt_name in budget_lookup:
-                        verrechnete = budget_lookup[projekt_name].get("Verrechnete_Honorare", 0)
+
+                    projekt_name = row_data["proj_norm"]
+                    ms_name = row_data["ms_norm"]
+
+                    # Find which Obermeilenstein this work package belongs to
+                    obermeilenstein = work_package_to_obermeilenstein.get((projekt_name, ms_name))
+
+                    # If not found with full project name, try with project code
+                    if not obermeilenstein and " " in projekt_name:
+                        projekt_code = projekt_name.split(maxsplit=1)[0].strip()
+                        obermeilenstein = work_package_to_obermeilenstein.get((projekt_code, ms_name))
+
+                    # Look up budget using (Projekt, Obermeilenstein) key
+                    budget_key = (projekt_name, obermeilenstein) if obermeilenstein else None
+                    budget_data = budget_lookup.get(budget_key) if budget_key else None
+
+                    if budget_data:
+                        # Budget Gesamt (Sollhonorar)
+                        budget_total = budget_data.get("Sollhonorar", 0)
+                        budget_total_cell.value = budget_total if budget_total > 0 else ""
+
+                        # Budget Ist (Istkosten)
+                        istkosten = budget_data.get("Istkosten", 0)
+                        budget_ist_cell.value = istkosten if istkosten > 0 else ""
+
+                        # Budget Erwirtschaftet (Verrechnete Honorare)
+                        verrechnete = budget_data.get("Verrechnete_Honorare", 0)
                         budget_earned_cell.value = verrechnete if verrechnete > 0 else ""
                     else:
+                        budget_total_cell.value = ""
+                        budget_ist_cell.value = ""
                         budget_earned_cell.value = ""
 
                     # Track row for this project/milestone/month combination
@@ -1407,7 +1453,7 @@ def generate_quarterly_report(
     df_csv = load_csv_projects(csv_path)
 
     progress_cb(8, "Lade Budget-Daten")
-    df_budget = load_csv_budget_data(csv_path)
+    df_budget, work_package_to_obermeilenstein = load_csv_budget_data(csv_path)
 
     progress_cb(10, "Lade XML-Daten")
     df_xml = load_xml_times(xml_path)
@@ -1422,6 +1468,7 @@ def generate_quarterly_report(
     result = build_quarterly_report(
         df_csv=df_csv,
         df_budget=df_budget,
+        work_package_to_obermeilenstein=work_package_to_obermeilenstein,
         df_xml=df_xml,
         target_quarter=selection.period,
         months=selection.months,
