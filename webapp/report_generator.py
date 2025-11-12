@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.formatting.rule import CellIsRule
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # ===================== BUDGETS FÜR 0000-PROJEKT =====================
 # Diese Budgets gelten für ALLE Mitarbeiter, die diese Meilensteine bearbeiten
@@ -408,6 +409,19 @@ def build_quarterly_report(
     employees = sorted(df_quarter["staff_name"].unique())
     total_emps = max(len(employees), 1)
 
+    # Build a map of which employees work on which project/milestone combinations
+    # Format: {(proj_norm, ms_norm): [list of employee names]}
+    project_milestone_employees = {}
+    for _, row in df_quarter.iterrows():
+        key = (row["proj_norm"], row["ms_norm"])
+        emp_name = row["staff_name"]
+        if key not in project_milestone_employees:
+            project_milestone_employees[key] = set()
+        project_milestone_employees[key].add(emp_name)
+    # Convert sets to sorted lists
+    for key in project_milestone_employees:
+        project_milestone_employees[key] = sorted(list(project_milestone_employees[key]))
+
     # Dictionary to store cell references for summary sheet
     employee_summary_data = {}
 
@@ -520,7 +534,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Zuordnen an", "Differenz (h)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -581,8 +595,9 @@ def build_quarterly_report(
                             round(ist_display, 2),
                             round(hours_value, 2),
                             round(pct_value, 2),
-                            None,
-                            None,  # Differenz column - will be filled with formula
+                            None,  # Bonus-Anpassung (H)
+                            None,  # Zuordnen an (I) - Dropdown will be added later
+                            None,  # Differenz (J) - will be filled with formula
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -600,8 +615,9 @@ def build_quarterly_report(
                             round(cum_ist, 2) if cum_ist > 0 else 0.0,
                             round(hours_value, 2),
                             round(prozent, 2) if q_soll > 0 else "-",
-                            None,
-                            None,  # Differenz column - will be filled with formula
+                            None,  # Bonus-Anpassung (H)
+                            None,  # Zuordnen an (I) - Dropdown will be added later
+                            None,  # Differenz (J) - will be filled with formula
                         ])
 
                     for cell in ws[current_row]:
@@ -615,8 +631,19 @@ def build_quarterly_report(
                         adjustment_cells_regular.append(adj_cell.coordinate)
                     adj_cell.number_format = "0.00"
 
-                    # Differenz cell (column I) - Formula: F - H (only show if H != 0)
-                    diff_cell = ws.cell(row=current_row, column=9)
+                    # Zuordnen an cell (column I) - Dropdown with other employees on same project/milestone
+                    assign_cell = ws.cell(row=current_row, column=9)
+                    key = (row_data["proj_norm"], row_data["ms_norm"])
+                    other_employees = [e for e in project_milestone_employees.get(key, []) if e != emp]
+                    if other_employees:
+                        # Create dropdown with other employees
+                        employee_list = ",".join(other_employees)
+                        dv = DataValidation(type="list", formula1=f'"{employee_list}"', allow_blank=True)
+                        dv.add(assign_cell)
+                        ws.add_data_validation(dv)
+
+                    # Differenz cell (column J) - Formula: F - H (only show if H != 0)
+                    diff_cell = ws.cell(row=current_row, column=10)
                     diff_cell.value = f"=IF(H{current_row}=0,\"\",F{current_row}-H{current_row})"
                     diff_cell.number_format = "0.00"
 
@@ -879,7 +906,8 @@ def build_quarterly_report(
         ws.column_dimensions['F'].width = 12
         ws.column_dimensions['G'].width = 8
         ws.column_dimensions['H'].width = 16
-        ws.column_dimensions['I'].width = 12
+        ws.column_dimensions['I'].width = 25  # Zuordnen an (Dropdown)
+        ws.column_dimensions['J'].width = 12  # Differenz
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
