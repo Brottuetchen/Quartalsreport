@@ -11,9 +11,6 @@ from __future__ import annotations
 
 import math
 import re
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -21,7 +18,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 # ===================== BUDGETS FÜR 0000-PROJEKT =====================
@@ -528,10 +525,12 @@ def build_quarterly_report(
 
                 for i, (_, row_data) in enumerate(proj_block.iterrows()):
                     ms_type = row_data["MeilensteinTyp"]
-                    typ_short = "Q" if ms_type == "quarterly" else "M"
-
                     hours_value = float(row_data.get("hours") or 0.0)
                     is_special_project = is_bonus_project(proj) or is_bonus_project(row_data.get("proj_norm", ""))
+                    if is_special_project:
+                        typ_short = "Q" if ms_type == "quarterly" else "M"
+                    else:
+                        typ_short = "G"
                     bonus_candidate = False
                     should_color = False
                     color_percentage = 0.0
@@ -887,127 +886,11 @@ def generate_quarterly_report(
     return result
 
 
-def export_sheets_to_pdf(
-    excel_path: Path,
-    output_dir: Path,
-    progress_cb: ProgressCallback = _noop_progress,
-) -> List[Path]:
-    """
-    Exports each worksheet from an Excel file as a separate PDF.
-
-    Uses LibreOffice in headless mode for conversion. Each PDF is named
-    as "{sheet_name}_{original_filename}.pdf".
-
-    Args:
-        excel_path: Path to the Excel file
-        output_dir: Directory where PDFs should be saved
-        progress_cb: Progress callback function
-
-    Returns:
-        List of paths to generated PDF files
-
-    Raises:
-        RuntimeError: If LibreOffice is not found or conversion fails
-    """
-
-    # Check if LibreOffice is available
-    soffice_paths = [
-        "soffice",  # Linux/Mac if in PATH
-        "/usr/bin/soffice",  # Linux
-        "/usr/bin/libreoffice",  # Linux alternative
-        "C:\\Program Files\\LibreOffice\\program\\soffice.exe",  # Windows
-        "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",  # Windows 32-bit
-    ]
-
-    soffice_cmd = None
-    for path in soffice_paths:
-        if shutil.which(path) or Path(path).exists():
-            soffice_cmd = path
-            break
-
-    if not soffice_cmd:
-        raise RuntimeError(
-            "LibreOffice nicht gefunden. Bitte installieren Sie LibreOffice für die PDF-Export-Funktionalität.\n"
-            "Download: https://www.libreoffice.org/download/"
-        )
-
-    progress_cb(5, "Lade Excel-Datei")
-
-    # Load workbook to get sheet names
-    wb = load_workbook(excel_path, read_only=True)
-    sheet_names = wb.sheetnames
-    wb.close()
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    generated_pdfs = []
-
-    base_filename = excel_path.stem
-    total_sheets = len(sheet_names)
-
-    progress_cb(10, f"Exportiere {total_sheets} Arbeitsblätter")
-
-    # Create a temporary directory for intermediate files
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-
-        for idx, sheet_name in enumerate(sheet_names, start=1):
-            progress = int(10 + (idx / total_sheets) * 80)
-            progress_cb(progress, f"Exportiere Blatt '{sheet_name}'")
-
-            # Create a temporary Excel file with only this sheet
-            temp_excel = temp_path / f"temp_{idx}.xlsx"
-            wb_temp = load_workbook(excel_path)
-
-            # Remove all sheets except the current one
-            for ws_name in wb_temp.sheetnames:
-                if ws_name != sheet_name:
-                    del wb_temp[ws_name]
-
-            wb_temp.save(temp_excel)
-            wb_temp.close()
-
-            # Convert to PDF using LibreOffice
-            try:
-                subprocess.run(
-                    [
-                        soffice_cmd,
-                        "--headless",
-                        "--convert-to",
-                        "pdf",
-                        "--outdir",
-                        str(temp_path),
-                        str(temp_excel),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    timeout=30,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"PDF-Konvertierung fehlgeschlagen für Blatt '{sheet_name}': {e.stderr.decode()}")
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"PDF-Konvertierung für Blatt '{sheet_name}' hat zu lange gedauert")
-
-            # Rename and move the PDF to output directory
-            temp_pdf = temp_path / f"temp_{idx}.pdf"
-            if temp_pdf.exists():
-                # Sanitize sheet name for filename
-                safe_sheet_name = re.sub(r'[<>:"/\\|?*]', '_', sheet_name)
-                output_pdf = output_dir / f"{safe_sheet_name}_{base_filename}.pdf"
-                shutil.move(str(temp_pdf), str(output_pdf))
-                generated_pdfs.append(output_pdf)
-            else:
-                raise RuntimeError(f"PDF für Blatt '{sheet_name}' wurde nicht erstellt")
-
-    progress_cb(100, f"{len(generated_pdfs)} PDFs erfolgreich erstellt")
-    return generated_pdfs
-
-
 __all__ = [
     "generate_quarterly_report",
     "determine_quarter",
     "list_available_quarters",
     "parse_quarter",
-    "export_sheets_to_pdf",
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]

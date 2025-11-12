@@ -8,9 +8,6 @@
   const errorBox = document.getElementById('error-box');
   const downloadBox = document.getElementById('download-box');
   const downloadLink = document.getElementById('download-link');
-  const exportPdfBtn = document.getElementById('export-pdf-btn');
-  const pdfExportBox = document.getElementById('pdf-export-box');
-  const pdfList = document.getElementById('pdf-list');
   const resetBtn = document.getElementById('reset-btn');
 
   let currentJobId = null;
@@ -38,8 +35,6 @@
     errorBox.classList.add('hidden');
     errorBox.textContent = '';
     downloadBox.classList.add('hidden');
-    pdfExportBox.classList.add('hidden');
-    pdfList.innerHTML = '';
     hideStatusCard();
     setLoading(false);
     form.reset();
@@ -124,58 +119,6 @@
       errorBox.textContent = err.message || String(err);
       errorBox.classList.remove('hidden');
       setLoading(false);
-    }
-  });
-
-  exportPdfBtn.addEventListener('click', async () => {
-    if (!currentJobId) {
-      alert('Kein Job verfügbar.');
-      return;
-    }
-
-    exportPdfBtn.disabled = true;
-    exportPdfBtn.textContent = 'Exportiere...';
-    pdfExportBox.classList.add('hidden');
-    pdfList.innerHTML = '';
-
-    try {
-      const response = await fetch(`/api/jobs/${currentJobId}/export-pdf`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || 'PDF-Export fehlgeschlagen');
-      }
-
-      const data = await response.json();
-
-      // Display PDF list
-      pdfExportBox.classList.remove('hidden');
-      pdfList.innerHTML = '';
-
-      if (data.pdfs && data.pdfs.length > 0) {
-        const ul = document.createElement('ul');
-        data.pdfs.forEach((pdfName) => {
-          const li = document.createElement('li');
-          const link = document.createElement('a');
-          link.href = `/api/jobs/${currentJobId}/pdf/${encodeURIComponent(pdfName)}`;
-          link.textContent = pdfName;
-          link.download = pdfName;
-          li.appendChild(link);
-          ul.appendChild(li);
-        });
-        pdfList.appendChild(ul);
-      }
-
-      exportPdfBtn.textContent = 'Als PDFs exportieren';
-      exportPdfBtn.disabled = false;
-      alert(data.message || 'PDFs erfolgreich erstellt');
-    } catch (err) {
-      exportPdfBtn.textContent = 'Als PDFs exportieren';
-      exportPdfBtn.disabled = false;
-      errorBox.textContent = `PDF-Export: ${err.message || String(err)}`;
-      errorBox.classList.remove('hidden');
     }
   });
 
