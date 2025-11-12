@@ -1,0 +1,37 @@
+╔════════════════════════════════════════════════════════════╗
+║         ENCODING-TEST FÜR DEUTSCHE UMLAUTE                 ║
+╚════════════════════════════════════════════════════════════╝
+
+Wenn Sie diese Datei korrekt sehen, sind alle Umlaute richtig:
+
+✓ Kleinbuchstaben: ä ö ü ß
+✓ Großbuchstaben: Ä Ö Ü
+✓ In Wörtern: verfügbar, Übersicht, für, wählen, Öffnen, über
+
+Test-Sätze aus der Benutzeranleitung:
+─────────────────────────────────────────────────────────────
+
+1. Das Tool ist als Webdienst verfügbar.
+2. Öffnen Sie Ihren Browser und navigieren Sie zur URL.
+3. Klicken Sie auf CSV (Soll/Ist) und wählen Sie Ihre Datei aus.
+4. Geben Sie das gewünschte Quartal an, z.B. 2025Q3.
+5. Während der Verarbeitung sehen Sie den Fortschrittsbalken.
+6. Die Übersicht zeigt monatliche Summen über alle Mitarbeiter.
+
+Wenn Sie statt dieser Zeichen folgendes sehen:
+  verfÃ¼gbar, Ã–ffnen, wÃ¤hlen, fÃ¼r, Ã¼ber
+
+... dann wird die Datei als ISO-8859-1/Latin-1 interpretiert,
+obwohl sie UTF-8 ist.
+
+LÖSUNG:
+─────────────────────────────────────────────────────────────
+1. Stellen Sie Ihren Editor/Viewer auf UTF-8 um
+2. Bei git: git config --global core.quotePath false
+3. Browser: Strg+F5 für Hard-Refresh (Cache leeren)
+4. Terminal: export LANG=de_DE.UTF-8
+
+════════════════════════════════════════════════════════════
+
+Diese Datei wurde gespeichert als: UTF-8 ohne BOM
+Zeilenenden: LF (Linux/Unix)

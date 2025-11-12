@@ -543,7 +543,7 @@ def build_quarterly_report(
                             pct_value = (ist_value / soll_value) * 100.0 if soll_value else 0.0
                             should_color = True
                             color_percentage = pct_value
-                            if pct_value < 100.0:
+                            if pct_value <= 100.0:
                                 bonus_candidate = True
                         else:
                             pct_value = 0.0
@@ -562,7 +562,7 @@ def build_quarterly_report(
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
                         cum_ist = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
                         prozent = (cum_ist / q_soll * 100.0) if q_soll > 0 else 0.0
-                        if prozent < 100.0:
+                        if prozent <= 100.0:
                             bonus_candidate = True
                         should_color = q_soll > 0
                         color_percentage = prozent

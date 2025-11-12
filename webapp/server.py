@@ -62,6 +62,16 @@ class Job:
 
 app = FastAPI(title="Quartalsreport Generator")
 
+# Ensure UTF-8 encoding for all responses
+@app.middleware("http")
+async def add_charset_header(request: Request, call_next):
+    response = await call_next(request)
+    if "text/html" in response.headers.get("content-type", ""):
+        response.headers["content-type"] = "text/html; charset=utf-8"
+    elif "application/json" in response.headers.get("content-type", ""):
+        response.headers["content-type"] = "application/json; charset=utf-8"
+    return response
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
