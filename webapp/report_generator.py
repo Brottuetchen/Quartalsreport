@@ -549,15 +549,18 @@ def build_quarterly_report(
                     if ms_type == "monthly":
                         soll_value = float(row_data.get("Soll") or 0.0)
                         csv_ist_total = float(row_data.get("Ist") or 0.0)
+                        ms_name = row_data["Meilenstein"]
 
-                        # Calculate IST by subtracting future months from CSV IST (backward calculation)
-                        # Last month: IST = CSV_IST
-                        # Previous months: IST = CSV_IST - XML_hours_of_future_months
-                        key = (row_data["proj_norm"], row_data["ms_norm"])
-                        xml_future_hours = float(future_hours_map.get(key, 0.0))
-
-                        # IST at end of current month = CSV IST - all future XML hours
-                        ist_display = csv_ist_total - xml_future_hours
+                        # For 0000-projects with MONTHLY_BUDGETS: IST = current month hours (no backward calc)
+                        if is_special_project and ms_name in MONTHLY_BUDGETS:
+                            ist_display = hours_value
+                        else:
+                            # For normal projects: backward calculation from CSV IST
+                            # Last month: IST = CSV_IST
+                            # Previous months: IST = CSV_IST - XML_hours_of_future_months
+                            key = (row_data["proj_norm"], row_data["ms_norm"])
+                            xml_future_hours = float(future_hours_map.get(key, 0.0))
+                            ist_display = csv_ist_total - xml_future_hours
 
                         if soll_value > 0:
                             pct_value = (ist_display / soll_value) * 100.0 if soll_value else 0.0
