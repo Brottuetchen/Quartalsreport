@@ -20,6 +20,7 @@ import pandas as pd
 import xml.etree.ElementTree as ET
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.formatting.rule import CellIsRule
 
 # ===================== BUDGETS FÜR 0000-PROJEKT =====================
 # Diese Budgets gelten für ALLE Mitarbeiter, die diese Meilensteine bearbeiten
@@ -590,10 +591,18 @@ def build_quarterly_report(
                         adjustment_cells_regular.append(adj_cell.coordinate)
                     adj_cell.number_format = "0.00"
 
-                    # Differenz cell (column I) - Formula: F - H
+                    # Differenz cell (column I) - Formula: F - H (only show if H != 0)
                     diff_cell = ws.cell(row=current_row, column=9)
-                    diff_cell.value = f"=F{current_row}-H{current_row}"
+                    diff_cell.value = f"=IF(H{current_row}=0,\"\",F{current_row}-H{current_row})"
                     diff_cell.number_format = "0.00"
+
+                    # Add conditional formatting to turn cell red when negative
+                    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                    red_font = Font(color='9C0006')
+                    ws.conditional_formatting.add(
+                        diff_cell.coordinate,
+                        CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, fill=red_fill, font=red_font)
+                    )
 
                     if should_color:
                         pct_cell = ws.cell(row=current_row, column=7)
