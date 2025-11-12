@@ -433,10 +433,7 @@ def build_quarterly_report(
         total_bonus_hours_quarter = 0.0
         total_bonus_special_hours_quarter = 0.0
 
-        # Convert months to list for indexing
-        months_list = list(months)
-
-        for month_idx, month in enumerate(months_list, start=1):
+        for month in months:
             df_month = df_quarter[(df_quarter["period"] == month) & (df_quarter["staff_name"] == emp)].copy()
 
             if df_month.empty:
@@ -467,8 +464,9 @@ def build_quarterly_report(
                     ms_type = month_data.loc[idx, "MeilensteinTyp"]
 
                     if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS:
-                        # Cumulative SOLL for monthly budgets: budget × month_index
-                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
+                        # Monthly budget (NOT cumulative - each month has its own budget)
+                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
+                        month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             for idx in month_data.index:
                 ms_name = month_data.loc[idx, "Meilenstein"]
@@ -476,8 +474,9 @@ def build_quarterly_report(
                 proj_name = month_data.loc[idx, "Projekte"]
                 proj_norm = month_data.loc[idx, "proj_norm"] if "proj_norm" in month_data.columns else ""
                 if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS and (is_bonus_project(proj_name) or is_bonus_project(proj_norm)):
-                    # Cumulative SOLL for monthly budgets: budget × month_index
-                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
+                    # Monthly budget (NOT cumulative - each month has its own budget)
+                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
+                    month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             def _compute_month_qsoll(row):
                 if row.get("MeilensteinTyp") != "quarterly":
@@ -497,36 +496,12 @@ def build_quarterly_report(
 
             month_data["QuartalsSoll"] = month_data.apply(_compute_month_qsoll, axis=1)
 
-            # Calculate XML hour maps for IST calculation
-            df_quarter_emp = df_quarter[df_quarter["staff_name"] == emp]
-
-            # Total XML hours for entire quarter (used as "CSV IST" for 0000-projects)
-            quarter_xml_totals = {
-                (r["proj_norm"], r["ms_norm"]): r["hours"]
-                for _, r in df_quarter_emp.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
-            }
-
             # XML hours for months AFTER the current month (for backward calculation)
-            df_after_month = df_quarter_emp[df_quarter_emp["period"] > month]
+            df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
             future_hours_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
                 for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
-
-            # Update IST to use quarter XML totals
-            for idx in month_data.index:
-                proj_norm = month_data.loc[idx, "proj_norm"]
-                ms_norm = month_data.loc[idx, "ms_norm"]
-                key = (proj_norm, ms_norm)
-
-                # For 0000-projects, ALWAYS use quarter XML totals as IST (not CSV)
-                if is_bonus_project(proj_norm):
-                    if key in quarter_xml_totals:
-                        month_data.loc[idx, "Ist"] = quarter_xml_totals[key]
-                # For other projects with no CSV IST, use quarter XML totals as fallback
-                elif month_data.loc[idx, "Ist"] == 0.0:
-                    if key in quarter_xml_totals:
-                        month_data.loc[idx, "Ist"] = quarter_xml_totals[key]
 
             month_data = month_data.sort_values(["Projekte", "Meilenstein"])
 
