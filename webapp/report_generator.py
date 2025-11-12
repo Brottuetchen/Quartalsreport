@@ -496,7 +496,14 @@ def build_quarterly_report(
 
             month_data["QuartalsSoll"] = month_data.apply(_compute_month_qsoll, axis=1)
 
-            # XML hours for months AFTER the current month (for backward calculation)
+            # Cumulative XML hours up to current month (for quarterly milestones)
+            df_to_date = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] <= month)]
+            cum_hours_map = {
+                (r["proj_norm"], r["ms_norm"]): r["hours"]
+                for _, r in df_to_date.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
+            }
+
+            # XML hours for months AFTER the current month (for backward calculation on monthly milestones)
             df_after_month = df_quarter[(df_quarter["staff_name"] == emp) & (df_quarter["period"] > month)]
             future_hours_map = {
                 (r["proj_norm"], r["ms_norm"]): r["hours"]
