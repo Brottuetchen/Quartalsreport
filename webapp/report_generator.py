@@ -433,11 +433,10 @@ def build_quarterly_report(
         total_bonus_hours_quarter = 0.0
         total_bonus_special_hours_quarter = 0.0
 
-        # Track which month we're in (1-based index for cumulative calculations)
-        month_index = 0
+        # Convert months to list for indexing
+        months_list = list(months)
 
-        for month in months:
-            month_index += 1
+        for month_idx, month in enumerate(months_list, start=1):
             df_month = df_quarter[(df_quarter["period"] == month) & (df_quarter["staff_name"] == emp)].copy()
 
             if df_month.empty:
@@ -468,7 +467,8 @@ def build_quarterly_report(
                     ms_type = month_data.loc[idx, "MeilensteinTyp"]
 
                     if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS:
-                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
+                        # Cumulative SOLL for monthly budgets: budget × month_index
+                        month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
                         month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             for idx in month_data.index:
@@ -477,7 +477,8 @@ def build_quarterly_report(
                 proj_name = month_data.loc[idx, "Projekte"]
                 proj_norm = month_data.loc[idx, "proj_norm"] if "proj_norm" in month_data.columns else ""
                 if ms_type == "monthly" and ms_name in MONTHLY_BUDGETS and (is_bonus_project(proj_name) or is_bonus_project(proj_norm)):
-                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name]
+                    # Cumulative SOLL for monthly budgets: budget × month_index
+                    month_data.loc[idx, "Soll"] = MONTHLY_BUDGETS[ms_name] * month_idx
                     month_data.loc[idx, "Ist"] = month_data.loc[idx, "hours"]
 
             def _compute_month_qsoll(row):
@@ -541,23 +542,12 @@ def build_quarterly_report(
                     color_percentage = 0.0
 
                     if ms_type == "monthly":
-                        # For monthly milestones, calculate cumulative Soll up to this month
-                        monthly_soll_base = float(row_data.get("Soll") or 0.0)
-                        ms_name = row_data["Meilenstein"]
-
-                        # If this is a 0000 project with monthly budget, use that for cumulative calculation
-                        if ms_name in MONTHLY_BUDGETS:
-                            monthly_soll_per_month = MONTHLY_BUDGETS[ms_name]
-                            soll_value = monthly_soll_per_month * month_index  # Cumulative Soll
-                        else:
-                            # For regular projects, keep the Soll from CSV (total Soll for the milestone)
-                            soll_value = monthly_soll_base
-
-                        # Use cumulative IST up to this month (not entire quarter)
-                        ist_cumulative = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
-                        ist_display = ist_cumulative
+                        soll_value = float(row_data.get("Soll") or 0.0)
+                        # Use cumulative IST from XML up to current month
+                        cum_ist = float(cum_hours_map.get((row_data["proj_norm"], row_data["ms_norm"]), 0.0))
+                        ist_display = cum_ist
                         if soll_value > 0:
-                            pct_value = (ist_cumulative / soll_value) * 100.0 if soll_value else 0.0
+                            pct_value = (cum_ist / soll_value) * 100.0 if soll_value else 0.0
                             should_color = True
                             color_percentage = pct_value
                             if pct_value <= 100.0:
