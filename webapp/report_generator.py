@@ -425,7 +425,17 @@ def build_quarterly_report(
     # Dictionary to store cell references for summary sheet
     employee_summary_data = {}
 
+    # Dictionary to track row assignments for "Von anderen" formula generation
+    # Format: {employee: {(proj_norm, ms_norm, month): row_number}}
+    row_assignments = {}
+
+    # Dictionary to track month sections for summing "Von anderen" cells
+    # Format: {employee: {month: (start_row, end_row, assigned_from_others_cell_row)}}
+    month_sections = {}
+
     for idx_emp, emp in enumerate(employees, start=1):
+        row_assignments[emp] = {}
+        month_sections[emp] = {}
         ws = wb.create_sheet(title=emp[:31])
         sheet_name = emp[:31]
         monthly_bonus_total_cells: List[str] = []
@@ -534,11 +544,14 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Zuordnen an", "Differenz (h)"])
+            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Zuordnen an", "Differenz (h)", "Von anderen (h)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
             current_row += 1
+
+            # Track start of month data section
+            month_data_start_row = current_row
 
             bonus_hours_month = 0.0
             bonus_hours_month_special = 0.0
@@ -598,6 +611,7 @@ def build_quarterly_report(
                             None,  # Bonus-Anpassung (H)
                             None,  # Zuordnen an (I) - Dropdown will be added later
                             None,  # Differenz (J) - will be filled with formula
+                            None,  # Von anderen (K) - will be filled with formula
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -618,6 +632,7 @@ def build_quarterly_report(
                             None,  # Bonus-Anpassung (H)
                             None,  # Zuordnen an (I) - Dropdown will be added later
                             None,  # Differenz (J) - will be filled with formula
+                            None,  # Von anderen (K) - will be filled with formula
                         ])
 
                     for cell in ws[current_row]:
@@ -655,6 +670,17 @@ def build_quarterly_report(
                         CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, fill=red_fill, font=red_font)
                     )
 
+                    # Von anderen cell (column K) - Formula to sum hours assigned by other employees
+                    # This will be filled in a second pass after all sheets are created
+                    from_others_cell = ws.cell(row=current_row, column=11)
+                    from_others_cell.number_format = "0.00"
+                    # Mark this cell with row info for later formula injection
+                    from_others_cell.value = 0  # Placeholder, will be replaced with formula
+
+                    # Track row for this project/milestone/month combination
+                    track_key = (row_data["proj_norm"], row_data["ms_norm"], month)
+                    row_assignments[emp][track_key] = current_row
+
                     if should_color:
                         pct_cell = ws.cell(row=current_row, column=7)
                         pct_cell.fill = PatternFill(
@@ -677,9 +703,12 @@ def build_quarterly_report(
                                    end_row=block_start + block_size - 1, end_column=1)
                     ws.cell(row=block_start, column=1).alignment = Alignment(vertical="top")
 
+            # Track end of month data section (before summary rows)
+            month_data_end_row = current_row - 1
+
             sum_hours = month_data["hours"].sum()
             total_hours_all_months += sum_hours
-            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", "", ""])
+            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", "", "", "", ""])
             sum_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -689,7 +718,7 @@ def build_quarterly_report(
             sum_total_cell.value = round(sum_hours, 2)
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", ""])
+            ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", ""])
             bonus_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -715,7 +744,7 @@ def build_quarterly_report(
             total_bonus_hours_quarter += bonus_hours_month
             current_row += 1
 
-            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", ""])
+            ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", "", "", ""])
             special_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -741,7 +770,36 @@ def build_quarterly_report(
             total_bonus_special_hours_quarter += bonus_hours_month_special
             current_row += 1
 
-            transfer_entries.append((month_str, sum_total_cell.coordinate, bonus_total_cell.coordinate, special_total_cell.coordinate))
+            # Zugeordnete Stunden von anderen MA - will be calculated with formula
+            ws.append(["", "Zugeordnete Stunden von anderen MA", "", "", "", 0, "", "", "", "", ""])
+            assigned_from_others_row_idx = current_row
+            for cell in ws[current_row]:
+                cell.font = Font(bold=True)
+                cell.border = border
+            assigned_from_others_cell = ws.cell(row=assigned_from_others_row_idx, column=6)
+            assigned_from_others_cell.number_format = "0.00"
+            # Formula will sum all "Von anderen (K)" cells in this month's section
+            # This will be filled after all sheets are created
+            assigned_from_others_cell.value = 0  # Placeholder
+
+            # Track month section info
+            month_sections[emp][month] = (month_data_start_row, month_data_end_row, assigned_from_others_row_idx)
+
+            current_row += 1
+
+            # Gesamt Bonus Stunden = Bonusberechtigte + Sonderprojekt + Zugeordnete
+            ws.append(["", "Gesamt Bonus Stunden", "", "", "", 0, "", "", "", "", ""])
+            total_bonus_row_idx = current_row
+            for cell in ws[current_row]:
+                cell.font = Font(bold=True)
+                cell.border = border
+                cell.fill = PatternFill(start_color='D9EAD3', end_color='D9EAD3', fill_type='solid')
+            total_bonus_cell = ws.cell(row=total_bonus_row_idx, column=6)
+            total_bonus_cell.number_format = "0.00"
+            total_bonus_cell.value = f"={bonus_total_cell.coordinate}+{special_total_cell.coordinate}+{assigned_from_others_cell.coordinate}"
+            current_row += 1
+
+            transfer_entries.append((month_str, sum_total_cell.coordinate, bonus_total_cell.coordinate, special_total_cell.coordinate, assigned_from_others_cell.coordinate, total_bonus_cell.coordinate))
 
             # Store cell references for summary sheet
             employee_summary_data[emp]['months'][month_str] = {
@@ -758,14 +816,14 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Monat", "Mitarbeiter", "Prod. Stunden", "Bonusberechtigte Stunden", "Bonusberechtigte Stunden Sonderprojekt"])
+            ws.append(["Monat", "Mitarbeiter", "Prod. Stunden", "Bonusberechtigte Stunden", "Bonusberechtigte Stunden Sonderprojekt", "Zugeordnet von anderen", "Gesamt Bonus"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
             current_row += 1
 
-            for month_label, total_cell, bonus_cell, special_cell in transfer_entries:
-                ws.append([month_label, emp, f"={total_cell}", f"={bonus_cell}", f"={special_cell}"])
+            for month_label, total_cell, bonus_cell, special_cell, assigned_cell, total_bonus_cell in transfer_entries:
+                ws.append([month_label, emp, f"={total_cell}", f"={bonus_cell}", f"={special_cell}", f"={assigned_cell}", f"={total_bonus_cell}"])
                 for cell in ws[current_row]:
                     cell.border = border
                 current_row += 1
@@ -908,9 +966,45 @@ def build_quarterly_report(
         ws.column_dimensions['H'].width = 16
         ws.column_dimensions['I'].width = 25  # Zuordnen an (Dropdown)
         ws.column_dimensions['J'].width = 12  # Differenz
+        ws.column_dimensions['K'].width = 15  # Von anderen
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
+
+    # Second pass: Fill "Von anderen" formulas
+    progress_cb(90, "Erstelle Zuordnungs-Formeln")
+    for emp in employees:
+        ws = wb[emp[:31]]
+        for track_key, row_num in row_assignments[emp].items():
+            proj_norm, ms_norm, month = track_key
+            # Build formula to sum hours from other employees who assigned to this employee
+            formula_parts = []
+            for other_emp in employees:
+                if other_emp == emp:
+                    continue
+                other_key = (proj_norm, ms_norm, month)
+                if other_key in row_assignments[other_emp]:
+                    other_row = row_assignments[other_emp][other_key]
+                    other_sheet = other_emp[:31]
+                    # Add SUMIF formula part: IF assign cell (I) = current emp, then add diff cell (J)
+                    formula_parts.append(f"IF('{other_sheet}'!I{other_row}=\"{emp}\",'{other_sheet}'!J{other_row},0)")
+
+            # Set the formula in "Von anderen" cell (column K)
+            from_others_cell = ws.cell(row=row_num, column=11)
+            if formula_parts:
+                formula = "=" + "+".join(formula_parts)
+                from_others_cell.value = formula
+            else:
+                from_others_cell.value = 0
+
+        # Fill "Zugeordnete Stunden von anderen MA" sum formulas
+        for month, (start_row, end_row, assigned_row) in month_sections[emp].items():
+            assigned_cell = ws.cell(row=assigned_row, column=6)
+            # Sum all "Von anderen (K)" cells in this month section
+            if start_row <= end_row:
+                assigned_cell.value = f"=SUM(K{start_row}:K{end_row})"
+            else:
+                assigned_cell.value = 0
 
     # Create summary cover sheet
     progress_cb(96, "Erstelle Deckblatt")
