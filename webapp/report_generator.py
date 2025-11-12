@@ -513,10 +513,18 @@ def build_quarterly_report(
                 for _, r in df_after_month.groupby(["proj_norm", "ms_norm"], as_index=False).agg({"hours": "sum"}).iterrows()
             }
 
-            # Update IST for 0000-projects to use quarter XML totals
+            # Update IST to use quarter XML totals
             for idx in month_data.index:
-                if month_data.loc[idx, "Ist"] == 0.0:
-                    key = (month_data.loc[idx, "proj_norm"], month_data.loc[idx, "ms_norm"])
+                proj_norm = month_data.loc[idx, "proj_norm"]
+                ms_norm = month_data.loc[idx, "ms_norm"]
+                key = (proj_norm, ms_norm)
+
+                # For 0000-projects, ALWAYS use quarter XML totals as IST (not CSV)
+                if is_bonus_project(proj_norm):
+                    if key in quarter_xml_totals:
+                        month_data.loc[idx, "Ist"] = quarter_xml_totals[key]
+                # For other projects with no CSV IST, use quarter XML totals as fallback
+                elif month_data.loc[idx, "Ist"] == 0.0:
                     if key in quarter_xml_totals:
                         month_data.loc[idx, "Ist"] = quarter_xml_totals[key]
 
