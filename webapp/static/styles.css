@@ -131,3 +131,81 @@ button:disabled {
   }
 }
 
+/* Dark Mode Styles */
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+
+  .card {
+    background: #1e293b;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  h1 {
+    color: #f1f5f9;
+  }
+
+  label {
+    color: #cbd5e1;
+  }
+
+  input[type="text"],
+  input[type="file"] {
+    background: #0f172a;
+    border: 1px solid #475569;
+    color: #e2e8f0;
+  }
+
+  input[type="text"]:focus,
+  input[type="file"]:focus {
+    outline: 2px solid #3b82f6;
+    border-color: #3b82f6;
+  }
+
+  button,
+  a#download-link {
+    background: #3b82f6;
+  }
+
+  button:hover:not(:disabled),
+  a#download-link:hover {
+    background: #2563eb;
+  }
+
+  button:disabled {
+    background: #475569;
+  }
+
+  .progress {
+    background: #334155;
+  }
+
+  .status-line {
+    color: #cbd5e1;
+  }
+
+  .error {
+    background: #7f1d1d;
+    border: 1px solid #991b1b;
+    color: #fecaca;
+  }
+
+  #reset-btn {
+    background: #475569;
+  }
+
+  #reset-btn:hover {
+    background: #64748b;
+  }
+
+  input[type="radio"] {
+    accent-color: #3b82f6;
+  }
+
+  small {
+    color: #94a3b8;
+  }
+}
+
