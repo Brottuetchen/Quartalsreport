@@ -13,7 +13,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -114,6 +114,13 @@ def is_bonus_project(name: str) -> bool:
     return s.startswith('0000')
 
 
+def is_nachtrag_package(name: str) -> bool:
+    if name is None or (isinstance(name, float) and math.isnan(name)):
+        return False
+    s = str(name).lower()
+    return "nat" in s or "nachtrag" in s
+
+
 def status_color_hex(p: float) -> str:
     if p < 90:
         return "C6EFCE"  # grün
@@ -123,12 +130,12 @@ def status_color_hex(p: float) -> str:
         return "F8CBAD"  # rot
 
 
-def detect_billing_type(arbeitspaket: str, honorarbereich: str) -> str:
+def detect_billing_type(arbeitspaket: str, honorarbereich: str, force: bool = False) -> str:
     """
     Erkennt die Abrechnungsart eines Projekts/Meilensteins.
     Returns: "Pauschale" | "Nachweis" | "Unbekannt"
     """
-    if pd.isna(honorarbereich) or str(honorarbereich).strip().upper() != "X":
+    if not force and (pd.isna(honorarbereich) or str(honorarbereich).strip().upper() != "X"):
         return "Unbekannt"  # Keine Obermeilenstein-Markierung
 
     if pd.isna(arbeitspaket):
@@ -148,10 +155,12 @@ def detect_billing_type(arbeitspaket: str, honorarbereich: str) -> str:
     return "Unbekannt"
 
 
-def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
+def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, str], Set[str]]]:
     """
     Lädt Budget-Informationen aus CSV für Projekt-Budget-Übersicht.
-    Returns DataFrame mit Projekten, Abrechnungsart und Budget-Daten.
+    Returns:
+        Tuple[pd.DataFrame, Dict]: DataFrame mit Budgetdaten je Obermeilenstein sowie
+        ein Mapping {(Projekt|Projektcode, Meilenstein): {Obermeilensteine}} für Zuordnungen.
     """
     try_encodings = [("utf-16", "\t"), ("utf-8-sig", "\t"), ("cp1252", "\t")]
     df = None
@@ -167,6 +176,51 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
     df.columns = [c.strip().replace("\u200b", "").replace("\ufeff", "") for c in df.columns]
     df["Projekte"] = df["Projekte"].ffill()
 
+    def _project_keys(name: str) -> List[str]:
+        """Returns possible lookup keys for a project (full string + first token/code)."""
+        if name is None:
+            return []
+        base = str(name).strip()
+        if not base:
+            return []
+        keys = [base]
+        first = base.split(maxsplit=1)[0].strip() if base.split() else base
+        if first and first not in keys:
+            keys.append(first)
+        return keys
+
+    milestone_parent_map: Dict[Tuple[str, str], Set[str]] = {}
+    current_project = None
+    current_parent_norm = None
+
+    for _, raw_row in df.iterrows():
+        projekt = str(raw_row.get("Projekte", "")).strip()
+        arbeitspaket_raw = str(raw_row.get("Arbeitspaket", "")).strip()
+        honorarbereich = str(raw_row.get("Honorarbereich", "")).strip().upper()
+
+        if projekt != current_project:
+            current_project = projekt
+            current_parent_norm = None
+
+        if not arbeitspaket_raw or arbeitspaket_raw == "-":
+            current_parent_norm = None
+            continue
+
+        ms_norm_value = norm_ms(arbeitspaket_raw)
+        if not ms_norm_value:
+            continue
+
+        project_keys = _project_keys(projekt)
+        if honorarbereich == "X":
+            current_parent_norm = ms_norm_value
+            for key in project_keys:
+                milestone_parent_map.setdefault((key, ms_norm_value), set()).add(ms_norm_value)
+            continue
+
+        if current_parent_norm:
+            for key in project_keys:
+                milestone_parent_map.setdefault((key, ms_norm_value), set()).add(current_parent_norm)
+
     # Nur Obermeilensteine (X-Markierung) interessieren uns für Budget-Übersicht
     mask_obermeilenstein = (
         df["Honorarbereich"].notna() &
@@ -176,10 +230,13 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
     )
 
     budget_rows = []
+    added_budget_keys: Set[Tuple[str, str]] = set()
 
     for idx, row in df[mask_obermeilenstein].iterrows():
         projekt = str(row["Projekte"]).strip()
         arbeitspaket = str(row["Arbeitspaket"]).strip()
+        projekt_code = projekt.split(maxsplit=1)[0].strip() if projekt.split() else projekt
+        ober_norm = norm_ms(arbeitspaket)
 
         # Abrechnungsart erkennen
         billing_type = detect_billing_type(arbeitspaket, row["Honorarbereich"])
@@ -199,13 +256,15 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
 
         # Suche nach Unterpositionen mit SV/CAD/ADM
         # Nächste Zeilen nach dem Obermeilenstein durchsuchen
-        for sub_idx in range(idx + 1, min(idx + 20, len(df))):
+        for sub_idx in range(idx + 1, min(idx + 80, len(df))):
             sub_row = df.iloc[sub_idx]
-            sub_arbeitspaket = str(sub_row.get("Arbeitspaket", ""))
+            sub_arbeitspaket = str(sub_row.get("Arbeitspaket", "")).strip()
+            if not sub_arbeitspaket or sub_arbeitspaket == "-":
+                continue
 
-            # Prüfe ob es eine Unterposition ist (beginnt mit " und enthält ')
-            if not sub_arbeitspaket.startswith('"'):
-                break  # Nächster Obermeilenstein erreicht
+            sub_honorar = str(sub_row.get("Honorarbereich", "")).strip().upper()
+            if sub_honorar == "X":
+                break  # nächster Obermeilenstein erreicht
 
             # Extrahiere Position
             if "'   SV" in sub_arbeitspaket or "'   S V" in sub_arbeitspaket:
@@ -224,6 +283,48 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
                 if sub_sollstunden > 0:
                     rate_adm = sub_budget / sub_sollstunden
 
+            # Untermeilensteine mit eigenem Budget (z. B. NAT) separat aufnehmen
+            if is_nachtrag_package(sub_arbeitspaket):
+                sub_sollhonor = de_to_float(sub_row.get("Budget", 0))
+                if pd.isna(sub_sollhonor) or sub_sollhonor == 0:
+                    sub_sollhonor = de_to_float(sub_row.get("Sollhonorar", 0))
+                if pd.isna(sub_sollhonor) or sub_sollhonor == 0:
+                    continue
+                sub_sollstunden = de_to_float(sub_row.get("Sollstunden Budget", 0))
+                sub_iststunden = de_to_float(sub_row.get("Iststunden", 0))
+                sub_verrechnete = de_to_float(sub_row.get("Verrechnete Honorare", 0))
+                sub_istkosten = de_to_float(sub_row.get("Istkosten", 0))
+                sub_norm = norm_ms(sub_arbeitspaket)
+                sub_key = (projekt, sub_norm)
+                if sub_key in added_budget_keys:
+                    continue
+
+                sub_billing = detect_billing_type(sub_arbeitspaket, "X", force=True)
+                if sub_billing == "Unbekannt":
+                    sub_billing = billing_type
+
+                default_rate = sub_sollhonor / sub_sollstunden if sub_sollstunden and sub_sollstunden > 0 else None
+                budget_rows.append({
+                    "Projekt": projekt,
+                    "ProjektCode": projekt_code,
+                    "Obermeilenstein": sub_arbeitspaket,
+                    "Obermeilenstein_norm": sub_norm,
+                    "Abrechnungsart": sub_billing,
+                    "Gesamtbudget": sub_sollhonor,
+                    "Abgerechnet": sub_verrechnete,
+                    "Istkosten": sub_istkosten,
+                    "Sollstunden": sub_sollstunden,
+                    "Iststunden": sub_iststunden,
+                    "Stundensatz_SV": default_rate,
+                    "Stundensatz_CAD": default_rate,
+                    "Stundensatz_ADM": default_rate,
+                    "LookupKey": f"{projekt}||{sub_norm}",
+                })
+                added_budget_keys.add(sub_key)
+                project_keys = _project_keys(projekt)
+                for key in project_keys:
+                    milestone_parent_map.setdefault((key, sub_norm), set()).add(sub_norm)
+
         # Bei Pauschale: Berechne Stundensatz aus Sollhonor / Sollstunden
         if billing_type == "Pauschale" and sollstunden > 0:
             default_rate = sollhonor / sollstunden
@@ -234,21 +335,29 @@ def load_csv_budget_data(csv_path: Path) -> pd.DataFrame:
             if rate_adm is None:
                 rate_adm = default_rate
 
-        budget_rows.append({
-            "Projekt": projekt,
-            "Obermeilenstein": arbeitspaket,
-            "Abrechnungsart": billing_type,
-            "Gesamtbudget": sollhonor,
-            "Abgerechnet": verrechnete_honorare,
-            "Istkosten": istkosten,
-            "Sollstunden": sollstunden,
-            "Iststunden": iststunden,
-            "Stundensatz_SV": rate_sv,
-            "Stundensatz_CAD": rate_cad,
-            "Stundensatz_ADM": rate_adm,
-        })
+        main_key = (projekt, ober_norm)
+        if main_key not in added_budget_keys:
+            budget_rows.append({
+                "Projekt": projekt,
+                "ProjektCode": projekt_code,
+                "Obermeilenstein": arbeitspaket,
+                "Obermeilenstein_norm": ober_norm,
+                "Abrechnungsart": billing_type,
+                "Gesamtbudget": sollhonor,
+                "Abgerechnet": verrechnete_honorare,
+                "Istkosten": istkosten,
+                "Sollstunden": sollstunden,
+                "Iststunden": iststunden,
+                "Stundensatz_SV": rate_sv,
+                "Stundensatz_CAD": rate_cad,
+                "Stundensatz_ADM": rate_adm,
+                "LookupKey": f"{projekt}||{ober_norm}",
+            })
+            added_budget_keys.add(main_key)
 
-    return pd.DataFrame(budget_rows)
+    df_budget = pd.DataFrame(budget_rows)
+    df_budget["_LookupId"] = range(1, len(df_budget) + 1)
+    return df_budget, milestone_parent_map
 
 
 def load_csv_projects(csv_path: Path) -> pd.DataFrame:
@@ -408,6 +517,7 @@ def _create_project_budget_sheet(
     ws.append([])
 
     current_row = 5
+    header_row = current_row
 
     # Header row
     headers = [
@@ -415,13 +525,14 @@ def _create_project_budget_sheet(
         "Obermeilenstein",
         "Abrechnungsart",
         "Status",
-        "Gesamtbudget (€)",
-        "Abgerechnet (€)",
-        "Verfügbar (€)",
-        "Stundensatz SV (€/h)",
-        "Stundensatz CAD (€/h)",
-        "Stundensatz ADM (€/h)",
-        "Bemerkung"
+        "Gesamtbudget (�'�)",
+        "Abgerechnet (�'�)",
+        "Verf�gbar (�'�)",
+        "Stundensatz SV (�'�/h)",
+        "Stundensatz CAD (�'�/h)",
+        "Stundensatz ADM (�'�/h)",
+        "Bemerkung",
+        "_LookupId",
     ]
     ws.append(headers)
     for cell in ws[current_row]:
@@ -430,6 +541,8 @@ def _create_project_budget_sheet(
         cell.fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
         cell.font = Font(bold=True, color='FFFFFF')
     current_row += 1
+
+    data_start_row = current_row + 1
 
     # Data rows
     for _, row_data in df_budget.iterrows():
@@ -477,7 +590,8 @@ def _create_project_budget_sheet(
             rate_sv if rate_sv is not None else "",
             rate_cad if rate_cad is not None else "",
             rate_adm if rate_adm is not None else "",
-            bemerkung_text
+            bemerkung_text,
+            row_data.get("_LookupId", ""),
         ])
 
         # Styling für die Zeile
@@ -516,6 +630,11 @@ def _create_project_budget_sheet(
 
         current_row += 1
 
+    # Enable filter row and freeze panes for easier navigation
+    if current_row > data_start_row:
+        ws.auto_filter.ref = f"A{header_row}:L{current_row - 1}"
+    ws.freeze_panes = f"A{data_start_row}"
+
     # Column widths
     ws.column_dimensions['A'].width = 50
     ws.column_dimensions['B'].width = 50
@@ -528,6 +647,8 @@ def _create_project_budget_sheet(
     ws.column_dimensions['I'].width = 22
     ws.column_dimensions['J'].width = 22
     ws.column_dimensions['K'].width = 40
+    ws.column_dimensions['L'].width = 3
+    ws.column_dimensions['L'].hidden = True
 
 
 def _create_cover_sheet(
@@ -660,6 +781,7 @@ def _create_cover_sheet(
 def build_quarterly_report(
     df_csv: pd.DataFrame,
     df_budget: pd.DataFrame,
+    milestone_parent_map: Optional[Dict[Tuple[str, str], Set[str]]],
     df_xml: pd.DataFrame,
     target_quarter: pd.Period,
     months: Iterable[pd.Period],
@@ -679,41 +801,120 @@ def build_quarterly_report(
     progress_cb(18, "Erstelle Projekt-Budget-Übersicht")
     _create_project_budget_sheet(wb, df_budget, border)
 
-    # Create a lookup dict for budget data using df_budget (which has the Obermeilensteine with actual values)
-    # Store ONLY by project name (not project+milestone), as each Obermeilenstein has its own budget
-    # But we need to aggregate multiple Obermeilensteine per project to get total project budget
-    budget_lookup = {}
+    # Build lookup for each Obermeilenstein (no aggregation across a project)
+    budget_lookup: Dict[Tuple[str, str], Dict[str, float]] = {}
 
-    # Use df_budget which contains the Obermeilensteine data
-    # Group by Projekt and sum all Obermeilensteine for that project
-    for projekt_name, group in df_budget.groupby("Projekt"):
-        projekt = str(projekt_name).strip()
-        if projekt and projekt != "-" and projekt != "nan":
-            # Sum all Obermeilensteine budget values for this project
-            budget_data = {
-                "Budget": group["Gesamtbudget"].sum(),
-                "Sollhonorar": group["Gesamtbudget"].sum(),  # Sum of all Obermeilensteine
-                "Verrechnete_Honorare": group["Abgerechnet"].sum(),
-                "Istkosten": group["Istkosten"].sum(),
-            }
-            # Store with full project name
-            budget_lookup[projekt] = budget_data
-            # Also store with project code (first part before space) for flexible matching
-            parts = projekt.split(maxsplit=1)
-            if parts:
-                projekt_code = parts[0].strip()
-                # Only store if not already present or if this has higher values
-                if projekt_code not in budget_lookup or budget_lookup[projekt_code]["Sollhonorar"] < budget_data["Sollhonorar"]:
-                    budget_lookup[projekt_code] = budget_data
+    def _proj_keys_for_lookup(name: str) -> List[str]:
+        if name is None:
+            return []
+        base = str(name).strip()
+        if not base:
+            return []
+        keys = [base]
+        first = base.split(maxsplit=1)[0].strip() if base.split() else base
+        if first and first not in keys:
+            keys.append(first)
+        return keys
+
+    lookup_id_map: Dict[Tuple[str, str], int] = {}
+
+    for _, row in df_budget.iterrows():
+        projekt = str(row.get("Projekt", "")).strip()
+        ober_norm = norm_ms(row.get("Obermeilenstein"))
+        if not projekt or projekt in ("-", "nan") or not ober_norm:
+            continue
+        budget_data = {
+            "Sollhonorar": float(row.get("Gesamtbudget") or 0.0),
+            "Verrechnete_Honorare": float(row.get("Abgerechnet") or 0.0),
+            "Istkosten": float(row.get("Istkosten") or 0.0),
+            "Abrechnungsart": str(row.get("Abrechnungsart") or "").strip(),
+            "LookupId": int(row.get("_LookupId") or 0),
+            "Obermeilenstein_norm": ober_norm,
+        }
+        for key in _proj_keys_for_lookup(projekt):
+            budget_lookup[(key, ober_norm)] = budget_data
+            if budget_data["LookupId"]:
+                lookup_id_map[(key, ober_norm)] = budget_data["LookupId"]
+
+    def _resolve_budget_data(proj_value: str, ms_value: str) -> Optional[Dict[str, float]]:
+        """Finds budget data for a (project, milestone) combination."""
+        if not proj_value:
+            return None
+        proj_variants = _proj_keys_for_lookup(proj_value)
+        ms_norm_value = norm_ms(ms_value)
+        if not ms_norm_value:
+            return None
+        candidates: List[Tuple[str, str]] = []
+        for key in proj_variants:
+            candidates.append((key, ms_norm_value))
+            if milestone_parent_map:
+                parents = milestone_parent_map.get((key, ms_norm_value))
+                if parents and len(parents) == 1:
+                    parent_value = next(iter(parents))
+                    candidates.append((key, parent_value))
+        for candidate in candidates:
+            if candidate in budget_lookup:
+                return budget_lookup[candidate]
+        return None
+
+    def _build_lookup_expr(col_letter: str, primary_id: Optional[int], fallback_id: Optional[int]) -> str:
+        def _index_expr(lookup_id: int) -> str:
+            return (
+                f"IFERROR(INDEX('Projekt-Budget-Übersicht'!${col_letter}:${col_letter},"
+                f"MATCH({lookup_id},'Projekt-Budget-Übersicht'!$L:$L,0)),0)"
+            )
+
+        if primary_id is None:
+            if fallback_id is not None:
+                return _index_expr(fallback_id)
+            return "0"
+
+        primary_expr = _index_expr(primary_id)
+        if fallback_id is not None:
+            fallback_expr = _index_expr(fallback_id)
+            return f"IF({primary_expr}=0,{fallback_expr},{primary_expr})"
+        return primary_expr
+
+    def _determine_lookup_ids(proj_value: str, ms_value: str) -> Tuple[Optional[int], Optional[int]]:
+        if not proj_value or not ms_value:
+            return None, None
+
+        ms_norm_value = norm_ms(ms_value)
+        proj_variants = _proj_keys_for_lookup(proj_value)
+
+        primary_id = None
+        for key in proj_variants:
+            candidate = (key, ms_norm_value)
+            lookup_id = lookup_id_map.get(candidate)
+            if lookup_id:
+                primary_id = lookup_id
+                break
+
+        fallback_id = None
+        if primary_id is None and milestone_parent_map:
+            parent_norm = None
+            for key in proj_variants:
+                parents = milestone_parent_map.get((key, ms_norm_value))
+                if parents:
+                    parent_norm = sorted(parents)[0]
+                    break
+            if parent_norm:
+                for key in proj_variants:
+                    lookup_id = lookup_id_map.get((key, parent_norm))
+                    if lookup_id:
+                        fallback_id = lookup_id
+                        break
+
+        return primary_id, fallback_id
 
     employees = sorted(df_quarter["staff_name"].unique())
     total_emps = max(len(employees), 1)
 
-    # Build a map of which employees work on which project/milestone combinations
-    # Format: {(proj_norm, ms_norm): [list of employee names]}
+    # Build a map of which employees work on which project/milestone combinations PER MONTH
+    # Format: {(proj_norm, ms_norm, month): [list of employee names]}
     project_milestone_employees = {}
     for _, row in df_quarter.iterrows():
-        key = (row["proj_norm"], row["ms_norm"])
+        key = (row["proj_norm"], row["ms_norm"], row["period"])
         emp_name = row["staff_name"]
         if key not in project_milestone_employees:
             project_milestone_employees[key] = set()
@@ -733,9 +934,20 @@ def build_quarterly_report(
     # Format: {employee: {month: (start_row, end_row, assigned_from_others_cell_row)}}
     month_sections = {}
 
+    revenue_cells_by_key: Dict[Tuple[str, str, pd.Period], List[Tuple[str, int]]] = {}
+
+    # Track quarterly row assignments across all employees
+    # Format: {employee: {(proj_norm, ms_norm): row_number}}
+    quarter_row_assignments_all = {}
+
+    # Track quarterly revenue cells across all employees
+    # Format: {(proj_norm, ms_norm): [(sheet_name, row_number), ...]}
+    revenue_cells_by_key_q_all: Dict[Tuple[str, str], List[Tuple[str, int]]] = {}
+
     for idx_emp, emp in enumerate(employees, start=1):
         row_assignments[emp] = {}
         month_sections[emp] = {}
+        quarter_row_assignments_all[emp] = {}
         ws = wb.create_sheet(title=emp[:31])
         sheet_name = emp[:31]
         monthly_bonus_total_cells: List[str] = []
@@ -853,7 +1065,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Typ", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Budget Ist (€)", "Budget Erwirtschaftet (€)"])
+            ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Kosten (€)", "Umsatz kumuliert (€)"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -875,10 +1087,13 @@ def build_quarterly_report(
                     ms_type = row_data["MeilensteinTyp"]
                     hours_value = float(row_data.get("hours") or 0.0)
                     is_special_project = is_bonus_project(proj) or is_bonus_project(row_data.get("proj_norm", ""))
-                    if is_special_project:
-                        typ_short = "Q" if ms_type == "quarterly" else "M"
-                    else:
-                        typ_short = "G"
+
+                    # Get billing type from budget data
+                    projekt_name = row_data["proj_norm"]
+                    meilenstein_name = row_data["ms_norm"]
+                    resolved_budget = _resolve_budget_data(projekt_name, meilenstein_name)
+                    billing_type_display = (resolved_budget.get("Abrechnungsart", "").strip()
+                                           if resolved_budget else "Unbekannt")
                     bonus_candidate = False
                     should_color = False
                     color_percentage = 0.0
@@ -912,7 +1127,7 @@ def build_quarterly_report(
                         ws.append([
                             proj if i == 0 else "",
                             row_data["Meilenstein"],
-                            typ_short,
+                            None,  # Abrechnungsart (C) - Formula will be added later
                             round(soll_value, 2),
                             round(ist_display, 2),
                             round(hours_value, 2),
@@ -924,8 +1139,8 @@ def build_quarterly_report(
                             None,  # Stundensatz (L) - Formula will be added later
                             None,  # Umsatz (M) - Formula will be added later
                             None,  # Budget Gesamt (N) - Formula will be added later
-                            None,  # Budget Ist (O) - From CSV
-                            None,  # Budget Erwirtschaftet (P) - Formula will be added later
+                            None,  # Kosten (O) - From CSV
+                            None,  # Umsatz kumuliert (P) - Formula will be added later
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -938,7 +1153,7 @@ def build_quarterly_report(
                         ws.append([
                             proj if i == 0 else "",
                             row_data["Meilenstein"],
-                            typ_short,
+                            None,  # Abrechnungsart (C) - Formula will be added later
                             round(q_soll, 2) if q_soll > 0 else "-",
                             round(cum_ist, 2) if cum_ist > 0 else 0.0,
                             round(hours_value, 2),
@@ -950,8 +1165,8 @@ def build_quarterly_report(
                             None,  # Stundensatz (L) - Formula will be added later
                             None,  # Umsatz (M) - Formula will be added later
                             None,  # Budget Gesamt (N) - Formula will be added later
-                            None,  # Budget Ist (O) - From CSV
-                            None,  # Budget Erwirtschaftet (P) - Formula will be added later
+                            None,  # Kosten (O) - From CSV
+                            None,  # Umsatz kumuliert (P) - Formula will be added later
                         ])
 
                     for cell in ws[current_row]:
@@ -967,12 +1182,12 @@ def build_quarterly_report(
 
                     # Differenz cell (column I) - Formula: F - H (only show if H != 0)
                     diff_cell = ws.cell(row=current_row, column=9)
-                    diff_cell.value = f"=IF(H{current_row}=0,\"\",F{current_row}-H{current_row})"
+                    diff_cell.value = f"=IF(H{current_row}=0,0,F{current_row}-H{current_row})"
                     diff_cell.number_format = "0.00"
 
-                    # Zuordnen an cell (column J) - Dropdown with other employees on same project/milestone
+                    # Zuordnen an cell (column J) - Dropdown with other employees on same project/milestone IN SAME MONTH
                     assign_cell = ws.cell(row=current_row, column=10)
-                    key = (row_data["proj_norm"], row_data["ms_norm"])
+                    key = (row_data["proj_norm"], row_data["ms_norm"], month)
                     other_employees = [e for e in project_milestone_employees.get(key, []) if e != emp]
                     if other_employees:
                         # Create dropdown with other employees
@@ -996,64 +1211,88 @@ def build_quarterly_report(
                     # Mark this cell with row info for later formula injection
                     from_others_cell.value = 0  # Placeholder, will be replaced with formula
 
-                    # Stundensatz cell (column L) - VLOOKUP formula to Projekt-Budget-Übersicht
-                    # Uses Position from B2 (employee position dropdown)
+                    proj_norm_value = row_data["proj_norm"]
+                    ms_norm_value = row_data["ms_norm"]
+                    lookup_primary_id, lookup_fallback_id = _determine_lookup_ids(proj_norm_value, ms_norm_value)
+
+                    # Abrechnungsart cell (column C) - Lookup from Projekt-Budget-Übersicht
+                    billing_cell = ws.cell(row=current_row, column=3)
+                    if lookup_primary_id or lookup_fallback_id:
+                        lookup_id = lookup_primary_id if lookup_primary_id else lookup_fallback_id
+                        billing_formula = (
+                            f'=IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$C:$C,'
+                            f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$L:$L,0)),"")'
+                        )
+                        billing_cell.value = billing_formula
+                    else:
+                        billing_cell.value = "Unbekannt"
+
+                    # Stundensatz cell (column L) - Lookup via Schlüssel
                     rate_cell = ws.cell(row=current_row, column=12)
                     rate_cell.number_format = '#,##0.00'
-                    # Formula depends on Position dropdown in B2: IF B2="-" then "", ELSE VLOOKUP
-                    # Returns the corresponding rate (SV=H, CAD=I, ADM=J, Pauschale=H as fallback)
-                    # Uses TRIM to remove extra spaces and make matching more robust
-                    rate_formula = (
-                        f'=IF($B$2="-","",IF($B$2="Pauschale",'
-                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$H:$H,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
-                        f'IF($B$2="SV",'
-                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$H:$H,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
-                        f'IF($B$2="CAD",'
-                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$I:$I,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
-                        f'IF($B$2="ADM",'
-                        f'IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$J:$J,MATCH(TRIM(A{current_row}),\'Projekt-Budget-Übersicht\'!$A:$A,0)),0),'
-                        f'0)))))'
-                    )
+
+                    # Build simplified formula with single IFERROR wrapper
+                    if lookup_primary_id or lookup_fallback_id:
+                        lookup_id = lookup_primary_id if lookup_primary_id else lookup_fallback_id
+                        rate_formula = (
+                            f'=IF($B$2="-",0,'
+                            f'IFERROR(INDEX('
+                            f'IF($B$2="SV",\'Projekt-Budget-Übersicht\'!$H:$H,'
+                            f'IF($B$2="CAD",\'Projekt-Budget-Übersicht\'!$I:$I,'
+                            f'IF($B$2="ADM",\'Projekt-Budget-Übersicht\'!$J:$J,'
+                            f'\'Projekt-Budget-Übersicht\'!$H:$H))),'  # Default to SV/Pauschale
+                            f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$L:$L,0)),0))'
+                        )
+                    else:
+                        rate_formula = "=IF($B$2=\"-\",0,0)"
                     rate_cell.value = rate_formula
 
-                    # Umsatz cell (column M) - Formula: Stundensatz * (Monat + Differenz + Von anderen)
+                    projekt_name = row_data["proj_norm"]
+                    meilenstein_name = row_data["ms_norm"]
+                    resolved_budget = _resolve_budget_data(projekt_name, meilenstein_name)
+                    billing_type = (resolved_budget.get("Abrechnungsart", "").strip()
+                                    if resolved_budget else "")
+
+                    # Umsatz cell (column M) - Formula depends on Abrechnungsart
                     revenue_cell = ws.cell(row=current_row, column=13)
                     revenue_cell.number_format = '#,##0.00'
-                    revenue_formula = f'=IF($B$2="-","",L{current_row}*(F{current_row}+I{current_row}+K{current_row}))'
+                    if billing_type == "Pauschale":
+                        revenue_formula = (
+                            f'=IF($B$2="-",0,IF(OR(N{current_row}=0,N(D{current_row})=0),0,'
+                            f'N{current_row}*((N(F{current_row})+N(I{current_row})+N(K{current_row}))/N(D{current_row}))))'
+                        )
+                    else:
+                        revenue_formula = (
+                            f'=IF($B$2="-",0,L{current_row}*('
+                            f'N(F{current_row})+N(I{current_row})+N(K{current_row})))'
+                        )
                     revenue_cell.value = revenue_formula
 
-                    # Budget Gesamt cell (column N) - Get from budget_lookup
+                    # Budget Gesamt cell (column N) - Lookup via Schlüssel
                     budget_total_cell = ws.cell(row=current_row, column=14)
                     budget_total_cell.number_format = '#,##0.00'
-                    projekt_name = row_data["proj_norm"]
-                    if projekt_name in budget_lookup:
-                        # Use Sollhonorar as total budget
-                        budget_total = budget_lookup[projekt_name].get("Sollhonorar", 0)
-                        budget_total_cell.value = budget_total if budget_total > 0 else ""
-                    else:
-                        budget_total_cell.value = ""
+                    budget_expr = _build_lookup_expr("E", lookup_primary_id, lookup_fallback_id)
+                    budget_total_cell.value = f"={budget_expr}"
 
-                    # Budget Ist cell (column O) - From CSV data (Istkosten)
+                    # Kosten cell (column O) - Real costs (Istkosten) from CSV
                     budget_ist_cell = ws.cell(row=current_row, column=15)
                     budget_ist_cell.number_format = '#,##0.00'
-                    if projekt_name in budget_lookup:
-                        istkosten = budget_lookup[projekt_name].get("Istkosten", 0)
-                        budget_ist_cell.value = istkosten if istkosten > 0 else ""
+                    if resolved_budget:
+                        istkosten_value = resolved_budget.get("Istkosten", 0) or 0
+                        budget_ist_cell.value = istkosten_value if istkosten_value != 0 else ""
                     else:
                         budget_ist_cell.value = ""
 
-                    # Budget Erwirtschaftet cell (column P) - Verrechnete Honorare from CSV
+                    # Umsatz kumuliert cell (column P) - Placeholder, will be filled in second pass
                     budget_earned_cell = ws.cell(row=current_row, column=16)
                     budget_earned_cell.number_format = '#,##0.00'
-                    if projekt_name in budget_lookup:
-                        verrechnete = budget_lookup[projekt_name].get("Verrechnete_Honorare", 0)
-                        budget_earned_cell.value = verrechnete if verrechnete > 0 else ""
-                    else:
-                        budget_earned_cell.value = ""
+                    budget_earned_cell.value = 0
 
                     # Track row for this project/milestone/month combination
                     track_key = (row_data["proj_norm"], row_data["ms_norm"], month)
                     row_assignments[emp][track_key] = current_row
+                    rev_ref = f"'{sheet_name}'!M{current_row}"
+                    revenue_cells_by_key.setdefault(track_key, []).append((sheet_name, current_row))
 
                     if should_color:
                         pct_cell = ws.cell(row=current_row, column=7)
@@ -1291,6 +1530,267 @@ def build_quarterly_report(
                                    end_row=block_start + block_size - 1, end_column=1)
                     ws.cell(row=block_start, column=1).alignment = Alignment(vertical="top")
 
+        # ========== QUARTERLY SUMMARY TABLE ==========
+        ws.append([])
+        current_row += 1
+        ws.append([f"--- Quartalszusammenfassung {target_quarter} ---"])
+        ws[f"A{current_row}"].font = Font(bold=True, size=14)
+        current_row += 1
+
+        # Aggregate quarter data for this employee - sum hours across all months
+        df_emp_quarter = df_quarter[df_quarter["staff_name"] == emp].copy()
+
+        # Group by project and milestone across all months to get quarterly totals
+        quarter_agg = (
+            df_emp_quarter.groupby(['proj_norm', 'ms_norm'], as_index=False)
+            .agg({'hours': 'sum'})
+        )
+
+        # Merge with CSV data to get project names and Soll values
+        quarter_with_csv = pd.merge(
+            quarter_agg,
+            df_csv[['proj_norm', 'ms_norm', 'Projekte', 'Meilenstein', 'Soll', 'Ist']],
+            on=['proj_norm', 'ms_norm'],
+            how='left'
+        )
+
+        # Drop duplicates that might arise from merge
+        quarter_with_csv = quarter_with_csv.drop_duplicates(subset=['proj_norm', 'ms_norm'])
+
+        # Header row for quarterly table
+        ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", "Quartal (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Kosten (€)", "Umsatz kumuliert (€)"])
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+        current_row += 1
+
+        quarter_data_start_row = current_row
+        adjustment_cells_regular_q = []
+        adjustment_cells_special_q = []
+
+        # Track row assignments for quarterly "Von anderen" formulas
+        # Format: {(proj_norm, ms_norm): row_number}
+        quarter_row_assignments = {}
+
+        # Track quarterly revenue cells by key
+        revenue_cells_by_key_q: Dict[Tuple[str, str], List[Tuple[str, int]]] = {}
+
+        # Process each project/milestone in the quarter
+        for proj, proj_block in quarter_with_csv.groupby("Projekte", sort=False):
+            proj_block = proj_block.reset_index(drop=True)
+            block_start = current_row
+
+            for i, (_, row_data) in enumerate(proj_block.iterrows()):
+                hours_value = float(row_data.get("hours") or 0.0)
+                is_special_project = is_bonus_project(proj) or is_bonus_project(row_data.get("proj_norm", ""))
+
+                # Get budget data
+                projekt_name = row_data["proj_norm"]
+                meilenstein_name = row_data["ms_norm"]
+                resolved_budget = _resolve_budget_data(projekt_name, meilenstein_name)
+
+                q_soll = float(row_data.get("Soll", 0.0) or 0.0)
+                ist_value = float(row_data.get("Ist", 0.0) or 0.0)
+                prozent = (ist_value / q_soll * 100.0) if q_soll > 0 else 0.0
+
+                should_color = q_soll > 0
+
+                # Append row
+                ws.append([
+                    proj if i == 0 else "",
+                    row_data["Meilenstein"],
+                    None,  # Abrechnungsart (C) - Formula will be added later
+                    round(q_soll, 2) if q_soll > 0 else "-",
+                    round(ist_value, 2) if ist_value > 0 else 0.0,
+                    round(hours_value, 2),
+                    round(prozent, 2) if q_soll > 0 else "-",
+                    None,  # Bonus-Anpassung (H)
+                    None,  # Differenz (I)
+                    "-",  # Zuordnen an (J) - Not applicable for quarterly view
+                    None,  # Von anderen (K) - Will be calculated
+                    None,  # Stundensatz (L)
+                    None,  # Umsatz (M)
+                    None,  # Budget Gesamt (N)
+                    None,  # Kosten (O)
+                    None,  # Umsatz kumuliert (P)
+                ])
+
+                for cell in ws[current_row]:
+                    cell.border = border
+
+                # Bonus-Anpassung cell (column H)
+                adj_cell = ws.cell(row=current_row, column=8)
+                if is_special_project:
+                    adjustment_cells_special_q.append(adj_cell.coordinate)
+                else:
+                    adjustment_cells_regular_q.append(adj_cell.coordinate)
+                adj_cell.number_format = "0.00"
+
+                # Differenz cell (column I)
+                diff_cell = ws.cell(row=current_row, column=9)
+                diff_cell.value = f"=IF(H{current_row}=0,0,F{current_row}-H{current_row})"
+                diff_cell.number_format = "0.00"
+
+                # Add red conditional formatting
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                red_font = Font(color='9C0006')
+                ws.conditional_formatting.add(
+                    diff_cell.coordinate,
+                    CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, fill=red_fill, font=red_font)
+                )
+
+                # Von anderen cell (column K) - Placeholder
+                from_others_cell_q = ws.cell(row=current_row, column=11)
+                from_others_cell_q.number_format = "0.00"
+                from_others_cell_q.value = 0
+
+                proj_norm_value = row_data["proj_norm"]
+                ms_norm_value = row_data["ms_norm"]
+                lookup_primary_id, lookup_fallback_id = _determine_lookup_ids(proj_norm_value, ms_norm_value)
+
+                # Abrechnungsart cell (column C)
+                billing_cell = ws.cell(row=current_row, column=3)
+                if lookup_primary_id or lookup_fallback_id:
+                    lookup_id = lookup_primary_id if lookup_primary_id else lookup_fallback_id
+                    billing_formula = (
+                        f'=IFERROR(INDEX(\'Projekt-Budget-Übersicht\'!$C:$C,'
+                        f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$L:$L,0)),"")'
+                    )
+                    billing_cell.value = billing_formula
+                else:
+                    billing_cell.value = "Unbekannt"
+
+                # Stundensatz cell (column L)
+                rate_cell = ws.cell(row=current_row, column=12)
+                rate_cell.number_format = '#,##0.00'
+                if lookup_primary_id or lookup_fallback_id:
+                    lookup_id = lookup_primary_id if lookup_primary_id else lookup_fallback_id
+                    rate_formula = (
+                        f'=IF($B$2="-",0,'
+                        f'IFERROR(INDEX('
+                        f'IF($B$2="SV",\'Projekt-Budget-Übersicht\'!$H:$H,'
+                        f'IF($B$2="CAD",\'Projekt-Budget-Übersicht\'!$I:$I,'
+                        f'IF($B$2="ADM",\'Projekt-Budget-Übersicht\'!$J:$J,'
+                        f'\'Projekt-Budget-Übersicht\'!$H:$H))),'
+                        f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$L:$L,0)),0))'
+                    )
+                else:
+                    rate_formula = "=IF($B$2=\"-\",0,0)"
+                rate_cell.value = rate_formula
+
+                billing_type = (resolved_budget.get("Abrechnungsart", "").strip()
+                                if resolved_budget else "")
+
+                # Umsatz cell (column M)
+                revenue_cell = ws.cell(row=current_row, column=13)
+                revenue_cell.number_format = '#,##0.00'
+                if billing_type == "Pauschale":
+                    revenue_formula = (
+                        f'=IF($B$2="-",0,IF(OR(N{current_row}=0,N(D{current_row})=0),0,'
+                        f'N{current_row}*((N(F{current_row})+N(I{current_row})+N(K{current_row}))/N(D{current_row}))))'
+                    )
+                else:
+                    revenue_formula = (
+                        f'=IF($B$2="-",0,L{current_row}*('
+                        f'N(F{current_row})+N(I{current_row})+N(K{current_row})))'
+                    )
+                revenue_cell.value = revenue_formula
+
+                # Budget Gesamt cell (column N)
+                budget_total_cell = ws.cell(row=current_row, column=14)
+                budget_total_cell.number_format = '#,##0.00'
+                budget_expr = _build_lookup_expr("E", lookup_primary_id, lookup_fallback_id)
+                budget_total_cell.value = f"={budget_expr}"
+
+                # Kosten cell (column O)
+                budget_ist_cell = ws.cell(row=current_row, column=15)
+                budget_ist_cell.number_format = '#,##0.00'
+                if resolved_budget:
+                    istkosten_value = resolved_budget.get("Istkosten", 0) or 0
+                    budget_ist_cell.value = istkosten_value if istkosten_value != 0 else ""
+                else:
+                    budget_ist_cell.value = ""
+
+                # Umsatz kumuliert cell (column P) - Placeholder
+                budget_earned_cell = ws.cell(row=current_row, column=16)
+                budget_earned_cell.number_format = '#,##0.00'
+                budget_earned_cell.value = 0
+
+                # Track row for quarterly assignments
+                track_key_q = (row_data["proj_norm"], row_data["ms_norm"])
+                quarter_row_assignments[track_key_q] = current_row
+                quarter_row_assignments_all[emp][track_key_q] = current_row
+                revenue_cells_by_key_q.setdefault(track_key_q, []).append((sheet_name, current_row))
+                revenue_cells_by_key_q_all.setdefault(track_key_q, []).append((sheet_name, current_row))
+
+                # Color percentage cell
+                if should_color:
+                    pct_cell = ws.cell(row=current_row, column=7)
+                    pct_cell.fill = PatternFill(
+                        start_color=status_color_hex(prozent),
+                        end_color=status_color_hex(prozent),
+                        fill_type="solid",
+                    )
+
+                current_row += 1
+
+            # Merge project cells
+            block_size = len(proj_block)
+            if block_size > 1:
+                ws.merge_cells(start_row=block_start, start_column=1,
+                               end_row=block_start + block_size - 1, end_column=1)
+                ws.cell(row=block_start, column=1).alignment = Alignment(vertical="top")
+
+        # Quarterly summary rows
+        quarter_data_end_row = current_row - 1
+
+        ws.append([])
+        current_row += 1
+
+        # Sum row
+        ws.append(["", "Summe", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        sum_row_idx_q = current_row
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+        sum_total_cell_q = ws.cell(row=sum_row_idx_q, column=6)
+        sum_total_cell_q.number_format = "0.00"
+        if quarter_data_start_row <= quarter_data_end_row:
+            sum_total_cell_q.value = f"=SUM(F{quarter_data_start_row}:F{quarter_data_end_row})"
+        else:
+            sum_total_cell_q.value = 0
+        current_row += 1
+
+        # Bonusberechtigte Stunden row
+        ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        bonus_row_idx_q = current_row
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+        bonus_total_cell_q = ws.cell(row=bonus_row_idx_q, column=6)
+        bonus_total_cell_q.number_format = "0.00"
+        if adjustment_cells_regular_q:
+            bonus_total_cell_q.value = f"=F{sum_row_idx_q}+SUM({','.join(adjustment_cells_regular_q)})"
+        else:
+            bonus_total_cell_q.value = f"=F{sum_row_idx_q}"
+        current_row += 1
+
+        # Bonusberechtigte Stunden Sonderprojekt row
+        ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        special_row_idx_q = current_row
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+        special_total_cell_q = ws.cell(row=special_row_idx_q, column=6)
+        special_total_cell_q.number_format = "0.00"
+        if adjustment_cells_special_q:
+            special_total_cell_q.value = f"=SUM({','.join(adjustment_cells_special_q)})"
+        else:
+            special_total_cell_q.value = 0
+        current_row += 1
+
+        # ========== END QUARTERLY SUMMARY TABLE ==========
+
         ws.append([])
         current_row += 1
         ws.append([f"--- Gesamtstunden {target_quarter} ---"])
@@ -1332,7 +1832,7 @@ def build_quarterly_report(
 
         ws.column_dimensions['A'].width = 40
         ws.column_dimensions['B'].width = 50
-        ws.column_dimensions['C'].width = 8
+        ws.column_dimensions['C'].width = 18  # Abrechnungsart
         ws.column_dimensions['D'].width = 12
         ws.column_dimensions['E'].width = 12
         ws.column_dimensions['F'].width = 12
@@ -1344,8 +1844,8 @@ def build_quarterly_report(
         ws.column_dimensions['L'].width = 18  # Stundensatz (€/h)
         ws.column_dimensions['M'].width = 15  # Umsatz (€)
         ws.column_dimensions['N'].width = 18  # Budget Gesamt (€)
-        ws.column_dimensions['O'].width = 15  # Budget Ist (€)
-        ws.column_dimensions['P'].width = 22  # Budget Erwirtschaftet (€)
+        ws.column_dimensions['O'].width = 15  # Kosten (€)
+        ws.column_dimensions['P'].width = 22  # Umsatz kumuliert (€)
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
@@ -1376,6 +1876,20 @@ def build_quarterly_report(
             else:
                 from_others_cell.value = 0
 
+            # Set cumulative revenue formula in column P
+            # Sum ALL revenue for this project/milestone in the current month, regardless of position
+            revenue_total_cell = ws.cell(row=row_num, column=16)
+            revenue_total_cell.number_format = '#,##0.00'
+            revenue_refs = revenue_cells_by_key.get(track_key, [])
+            if revenue_refs:
+                parts = [
+                    f"'{sheet}'!M{rev_row}"
+                    for sheet, rev_row in revenue_refs
+                ]
+                revenue_total_cell.value = "=" + "+".join(parts)
+            else:
+                revenue_total_cell.value = 0
+
         # Fill "Zugeordnete Stunden von anderen MA" sum formulas
         for month, (start_row, end_row, assigned_row) in month_sections[emp].items():
             assigned_cell = ws.cell(row=assigned_row, column=6)
@@ -1384,6 +1898,38 @@ def build_quarterly_report(
                 assigned_cell.value = f"=SUM(K{start_row}:K{end_row})"
             else:
                 assigned_cell.value = 0
+
+        # Fill quarterly "Von anderen" and "Umsatz kumuliert" formulas
+        for track_key_q, row_num in quarter_row_assignments_all[emp].items():
+            proj_norm, ms_norm = track_key_q
+
+            # Von anderen (column K) - Sum hours from ALL monthly tables for this employee
+            # across all months where this project/milestone appears
+            from_others_cell_q = ws.cell(row=row_num, column=11)
+            monthly_from_others_refs = []
+            for month in months:
+                monthly_key = (proj_norm, ms_norm, month)
+                if monthly_key in row_assignments[emp]:
+                    monthly_row = row_assignments[emp][monthly_key]
+                    monthly_from_others_refs.append(f"K{monthly_row}")
+
+            if monthly_from_others_refs:
+                from_others_cell_q.value = f"=SUM({','.join(monthly_from_others_refs)})"
+            else:
+                from_others_cell_q.value = 0
+
+            # Umsatz kumuliert (column P) - Sum ALL revenue for this project/milestone across ALL employees
+            revenue_total_cell_q = ws.cell(row=row_num, column=16)
+            revenue_total_cell_q.number_format = '#,##0.00'
+            revenue_refs_q = revenue_cells_by_key_q_all.get(track_key_q, [])
+            if revenue_refs_q:
+                parts = [
+                    f"'{sheet}'!M{rev_row}"
+                    for sheet, rev_row in revenue_refs_q
+                ]
+                revenue_total_cell_q.value = "=" + "+".join(parts)
+            else:
+                revenue_total_cell_q.value = 0
 
     # Create summary cover sheet
     progress_cb(96, "Erstelle Deckblatt")
@@ -1407,7 +1953,7 @@ def generate_quarterly_report(
     df_csv = load_csv_projects(csv_path)
 
     progress_cb(8, "Lade Budget-Daten")
-    df_budget = load_csv_budget_data(csv_path)
+    df_budget, milestone_parent_map = load_csv_budget_data(csv_path)
 
     progress_cb(10, "Lade XML-Daten")
     df_xml = load_xml_times(xml_path)
@@ -1422,6 +1968,7 @@ def generate_quarterly_report(
     result = build_quarterly_report(
         df_csv=df_csv,
         df_budget=df_budget,
+        milestone_parent_map=milestone_parent_map,
         df_xml=df_xml,
         target_quarter=selection.period,
         months=selection.months,
@@ -1441,6 +1988,4 @@ __all__ = [
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]
-
-
 
