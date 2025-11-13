@@ -2,13 +2,13 @@
 <html lang="de">
   <head>
     <meta charset="utf-8" />
-    <title>Quartalsreport Generator</title>
+    <title>Report Generator</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="container">
-      <h1>Quartalsreport Generator</h1>
+      <h1>Report Generator</h1>
       <section class="card">
         <form id="upload-form">
           <div class="field">
@@ -20,8 +20,30 @@
             <input id="xml-file" name="xml_file" type="file" accept=".xml" required />
           </div>
           <div class="field">
-            <label for="quarter">Quartal (optional, z. B. 2025Q3)</label>
-            <input id="quarter" name="quarter" type="text" placeholder="Auto-Auswahl" />
+            <label>Zeitraum auswählen</label>
+            <div style="margin-bottom: 10px;">
+              <label style="display: inline-block; margin-right: 20px;">
+                <input type="radio" name="period_type" value="quarter" id="radio-quarter" checked />
+                Quartal (z.B. Q3-2025)
+              </label>
+              <label style="display: inline-block;">
+                <input type="radio" name="period_type" value="custom" id="radio-custom" />
+                Benutzerdefinierter Zeitraum
+              </label>
+            </div>
+
+            <div id="quarter-input" style="margin-top: 10px;">
+              <label for="quarter">Quartal (optional, leer = neuestes Quartal)</label>
+              <input id="quarter" name="quarter" type="text" placeholder="z.B. Q3-2025 oder 2025Q3" />
+            </div>
+
+            <div id="custom-input" style="margin-top: 10px; display: none;">
+              <label for="custom-period">Von - Bis (TT.MM.JJJJ-TT.MM.JJJJ)</label>
+              <input id="custom-period" type="text" placeholder="z.B. 15.01.2025-15.02.2025" />
+              <small style="color: #666; font-size: 0.9em; margin-top: 4px; display: block;">
+                Format: TT.MM.JJJJ-TT.MM.JJJJ (z.B. vom 15. eines Monats bis zum 15. des nächsten)
+              </small>
+            </div>
           </div>
           <button id="submit-btn" type="submit">Report erzeugen</button>
         </form>

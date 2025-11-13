@@ -10,8 +10,31 @@
   const downloadLink = document.getElementById('download-link');
   const resetBtn = document.getElementById('reset-btn');
 
+  const radioQuarter = document.getElementById('radio-quarter');
+  const radioCustom = document.getElementById('radio-custom');
+  const quarterInput = document.getElementById('quarter-input');
+  const customInput = document.getElementById('custom-input');
+  const quarterField = document.getElementById('quarter');
+  const customPeriodField = document.getElementById('custom-period');
+
   let currentJobId = null;
   let pollTimer = null;
+
+  // Toggle between quarter and custom period inputs
+  function toggleInputs() {
+    if (radioQuarter.checked) {
+      quarterInput.style.display = 'block';
+      customInput.style.display = 'none';
+      customPeriodField.value = '';
+    } else {
+      quarterInput.style.display = 'none';
+      customInput.style.display = 'block';
+      quarterField.value = '';
+    }
+  }
+
+  radioQuarter.addEventListener('change', toggleInputs);
+  radioCustom.addEventListener('change', toggleInputs);
 
   function showStatusCard() {
     statusCard.classList.remove('hidden');
@@ -88,7 +111,23 @@
       return;
     }
 
-    const formData = new FormData(form);
+    // Prepare form data with the correct period value
+    const formData = new FormData();
+    formData.append('csv_file', csvFile);
+    formData.append('xml_file', xmlFile);
+
+    // Add the appropriate period value based on selection
+    if (radioCustom.checked) {
+      const customValue = customPeriodField.value.trim();
+      if (customValue) {
+        formData.append('quarter', customValue);
+      }
+    } else {
+      const quarterValue = quarterField.value.trim();
+      if (quarterValue) {
+        formData.append('quarter', quarterValue);
+      }
+    }
 
     setLoading(true);
     showStatusCard();

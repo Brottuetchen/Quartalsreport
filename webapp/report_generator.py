@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -240,6 +241,38 @@ class QuarterSelection:
     months: List[pd.Period]
 
 
+@dataclass
+class CustomPeriodSelection:
+    """Represents a custom time period that is not bound to quarters."""
+    start_date: datetime
+    end_date: datetime
+    months: List[pd.Period]
+    label: str  # Human-readable label like "15.01.2025 - 15.02.2025"
+
+
+def parse_custom_period(period_str: str) -> tuple[datetime, datetime]:
+    """Parse custom period strings like '15.01.2025-15.02.2025' or '2025-01-15:2025-02-15'."""
+    period_str = period_str.strip()
+
+    # Try format: DD.MM.YYYY-DD.MM.YYYY
+    match = re.match(r'^(\d{1,2})\.(\d{1,2})\.(\d{4})\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{4})$', period_str)
+    if match:
+        d1, m1, y1, d2, m2, y2 = match.groups()
+        start = datetime(int(y1), int(m1), int(d1))
+        end = datetime(int(y2), int(m2), int(d2))
+        return start, end
+
+    # Try format: YYYY-MM-DD:YYYY-MM-DD or YYYY-MM-DD to YYYY-MM-DD
+    match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})\s*[:to\s]+\s*(\d{4})-(\d{1,2})-(\d{1,2})$', period_str)
+    if match:
+        y1, m1, d1, y2, m2, d2 = match.groups()
+        start = datetime(int(y1), int(m1), int(d1))
+        end = datetime(int(y2), int(m2), int(d2))
+        return start, end
+
+    raise ValueError(f"Ungültiges Zeitraum-Format: {period_str}. Erwartete Formate: '15.01.2025-15.02.2025' oder '2025-01-15:2025-02-15'")
+
+
 def determine_quarter(df_xml: pd.DataFrame, requested: Optional[str] = None) -> QuarterSelection:
     """Wählt das Zielquartal basierend auf den XML-Daten."""
 
@@ -260,9 +293,67 @@ def determine_quarter(df_xml: pd.DataFrame, requested: Optional[str] = None) -> 
     return QuarterSelection(period=target, months=months)
 
 
+def determine_custom_period(df_xml: pd.DataFrame, period_str: str) -> CustomPeriodSelection:
+    """Determines a custom time period from the XML data based on date range."""
+    start_date, end_date = parse_custom_period(period_str)
+
+    if start_date >= end_date:
+        raise ValueError(f"Start-Datum muss vor End-Datum liegen: {start_date} >= {end_date}")
+
+    # Filter XML data by date range
+    df_xml = df_xml.copy()
+    mask = (df_xml["date_parsed"] >= pd.Timestamp(start_date)) & (df_xml["date_parsed"] <= pd.Timestamp(end_date))
+    df_filtered = df_xml[mask]
+
+    if df_filtered.empty:
+        raise ValueError(f"Keine Daten im angegebenen Zeitraum {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')} gefunden.")
+
+    # Get unique months in the period
+    months = sorted(df_filtered["period"].dropna().unique())
+
+    if not months:
+        raise ValueError(f"Keine Monate im Zeitraum {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')} gefunden.")
+
+    label = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
+
+    return CustomPeriodSelection(
+        start_date=start_date,
+        end_date=end_date,
+        months=months,
+        label=label
+    )
+
+
+def determine_period(df_xml: pd.DataFrame, requested: Optional[str] = None) -> QuarterSelection | CustomPeriodSelection:
+    """Determines either a quarter or a custom period based on the requested string format.
+
+    If requested is None, returns the latest quarter.
+    If requested looks like a quarter (e.g., 'Q3-2025'), returns a QuarterSelection.
+    If requested looks like a date range (e.g., '15.01.2025-15.02.2025'), returns a CustomPeriodSelection.
+    """
+    if not requested:
+        return determine_quarter(df_xml, requested=None)
+
+    # Try to parse as quarter first
+    try:
+        return determine_quarter(df_xml, requested=requested)
+    except ValueError:
+        pass
+
+    # Try to parse as custom period
+    try:
+        return determine_custom_period(df_xml, requested)
+    except ValueError as e:
+        # If both fail, provide helpful error message
+        raise ValueError(
+            f"Konnte '{requested}' weder als Quartal (z.B. 'Q3-2025') noch als Zeitraum (z.B. '15.01.2025-15.02.2025') parsen. "
+            f"Fehler: {str(e)}"
+        )
+
+
 def _create_cover_sheet(
     wb: Workbook,
-    target_quarter: pd.Period,
+    period_label: str,
     months: Iterable[pd.Period],
     employee_summary_data: Dict,
     border: Border,
@@ -273,7 +364,7 @@ def _create_cover_sheet(
     ws = wb.create_sheet(title="Übersicht", index=0)
 
     # Title
-    ws.append([f"Quartalsübersicht {target_quarter} - Zusammenfassung aller Mitarbeiter"])
+    ws.append([f"Übersicht {period_label} - Zusammenfassung aller Mitarbeiter"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([])
 
@@ -325,26 +416,26 @@ def _create_cover_sheet(
     ws.append([])
     current_row += 1
 
-    # Quarterly summary
-    ws.append(["--- Quartalssummen ---"])
+    # Period summary
+    ws.append(["--- Gesamtsummen ---"])
     ws[f"A{current_row}"].font = Font(bold=True, size=12)
     current_row += 1
 
-    # Collect quarterly total cell references from all employees
-    quarter_total_refs = []
-    quarter_bonus_refs = []
-    quarter_special_refs = []
+    # Collect period total cell references from all employees
+    period_total_refs = []
+    period_bonus_refs = []
+    period_special_refs = []
 
     for emp, emp_data in employee_summary_data.items():
-        if 'quarter_total_hours_cell' in emp_data:
-            quarter_total_refs.append(emp_data['quarter_total_hours_cell'])
-        if 'quarter_bonus_hours_cell' in emp_data:
-            quarter_bonus_refs.append(emp_data['quarter_bonus_hours_cell'])
-        if 'quarter_special_bonus_hours_cell' in emp_data:
-            quarter_special_refs.append(emp_data['quarter_special_bonus_hours_cell'])
+        if 'period_total_hours_cell' in emp_data:
+            period_total_refs.append(emp_data['period_total_hours_cell'])
+        if 'period_bonus_hours_cell' in emp_data:
+            period_bonus_refs.append(emp_data['period_bonus_hours_cell'])
+        if 'period_special_bonus_hours_cell' in emp_data:
+            period_special_refs.append(emp_data['period_special_bonus_hours_cell'])
 
     # Total hours
-    ws.append(["Gesamt eingetragene Stunden:", f"=SUM({','.join(quarter_total_refs)})" if quarter_total_refs else "0"])
+    ws.append(["Gesamt eingetragene Stunden:", f"=SUM({','.join(period_total_refs)})" if period_total_refs else "0"])
     ws[f"B{current_row}"].number_format = "0.00"
     for cell in ws[current_row]:
         cell.font = Font(bold=True)
@@ -352,7 +443,7 @@ def _create_cover_sheet(
     current_row += 1
 
     # Bonus hours
-    ws.append(["Bonusberechtigte Stunden (Quartal):", f"=SUM({','.join(quarter_bonus_refs)})" if quarter_bonus_refs else "0"])
+    ws.append(["Bonusberechtigte Stunden (Gesamt):", f"=SUM({','.join(period_bonus_refs)})" if period_bonus_refs else "0"])
     ws[f"B{current_row}"].number_format = "0.00"
     for cell in ws[current_row]:
         cell.font = Font(bold=True)
@@ -360,7 +451,7 @@ def _create_cover_sheet(
     current_row += 1
 
     # Special bonus hours
-    ws.append(["Bonusberechtigte Stunden Sonderprojekt (Quartal):", f"=SUM({','.join(quarter_special_refs)})" if quarter_special_refs else "0"])
+    ws.append(["Bonusberechtigte Stunden Sonderprojekt (Gesamt):", f"=SUM({','.join(period_special_refs)})" if period_special_refs else "0"])
     ws[f"B{current_row}"].number_format = "0.00"
     for cell in ws[current_row]:
         cell.font = Font(bold=True)
@@ -371,7 +462,7 @@ def _create_cover_sheet(
     current_row += 1
 
     # Employee list
-    ws.append(["--- Mitarbeiter in diesem Quartal ---"])
+    ws.append(["--- Mitarbeiter in diesem Zeitraum ---"])
     ws[f"A{current_row}"].font = Font(bold=True, size=12)
     current_row += 1
 
@@ -394,10 +485,26 @@ def build_quarterly_report(
     months: Iterable[pd.Period],
     out_path: Path,
     progress_cb: ProgressCallback = _noop_progress,
+    period_label: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
 ) -> Path:
-    """Erstellt Quartals-Excel mit Monats-Tabellen + Quartalsübersicht."""
+    """Erstellt Excel-Report mit Monats-Tabellen + Übersicht.
 
-    df_quarter = df_xml[df_xml["quarter"] == target_quarter].copy()
+    Supports both quarterly reports and custom date range reports.
+    If start_date and end_date are provided, filters by date range instead of quarter.
+    """
+
+    # Filter data by quarter or custom date range
+    if start_date and end_date:
+        # Custom period: filter by date range
+        mask = (df_xml["date_parsed"] >= pd.Timestamp(start_date)) & (df_xml["date_parsed"] <= pd.Timestamp(end_date))
+        df_quarter = df_xml[mask].copy()
+        display_label = period_label or f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
+    else:
+        # Quarterly report: filter by quarter
+        df_quarter = df_xml[df_xml["quarter"] == target_quarter].copy()
+        display_label = period_label or str(target_quarter)
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -424,7 +531,7 @@ def build_quarterly_report(
                 'months': {}
             }
 
-        ws.append([f"{emp} - Quartalsreport {target_quarter}"])
+        ws.append([f"{emp} - Report {display_label}"])
         ws.append([])
 
         current_row = 3
@@ -745,7 +852,7 @@ def build_quarterly_report(
         quarter_quarterly["QuartalsSoll"] = quarter_quarterly.apply(_compute_quarter_soll, axis=1)
 
         if not quarter_quarterly.empty:
-            ws.append([f"--- Quartalsübersicht {target_quarter} ---"])
+            ws.append([f"--- Quartalsübersicht {display_label} ---"])
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
@@ -793,7 +900,7 @@ def build_quarterly_report(
 
         ws.append([])
         current_row += 1
-        ws.append([f"--- Gesamtstunden {target_quarter} ---"])
+        ws.append([f"--- Gesamtstunden {display_label} ---"])
         ws[f"A{current_row}"].font = Font(bold=True, size=12)
         current_row += 1
         ws.append(["Gesamt eingetragene Stunden:", round(total_hours_all_months, 2)])
@@ -825,10 +932,10 @@ def build_quarterly_report(
             cell.font = Font(bold=True)
         current_row += 1
 
-        # Store quarterly summary cell references
-        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 2}"
-        employee_summary_data[emp]['quarter_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_bonus_cell.coordinate}"
-        employee_summary_data[emp]['quarter_special_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_special_cell.coordinate}"
+        # Store period summary cell references
+        employee_summary_data[emp]['period_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 2}"
+        employee_summary_data[emp]['period_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_bonus_cell.coordinate}"
+        employee_summary_data[emp]['period_special_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_special_cell.coordinate}"
 
         ws.column_dimensions['A'].width = 40
         ws.column_dimensions['B'].width = 50
@@ -844,7 +951,7 @@ def build_quarterly_report(
 
     # Create summary cover sheet
     progress_cb(96, "Erstelle Deckblatt")
-    _create_cover_sheet(wb, target_quarter, months, employee_summary_data, border)
+    _create_cover_sheet(wb, display_label, months, employee_summary_data, border)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
@@ -858,7 +965,14 @@ def generate_quarterly_report(
     requested_quarter: Optional[str] = None,
     progress_cb: ProgressCallback = _noop_progress,
 ) -> Path:
-    """Hauptfunktion: erzeugt den Bericht und gibt den Pfad zur Excel-Datei zurück."""
+    """Hauptfunktion: erzeugt den Bericht und gibt den Pfad zur Excel-Datei zurück.
+
+    Supports both quarterly reports and custom date range reports.
+    The requested_quarter parameter can be:
+    - None: use latest quarter
+    - Quarter format (e.g., 'Q3-2025'): generate quarterly report
+    - Date range format (e.g., '15.01.2025-15.02.2025'): generate custom period report
+    """
 
     progress_cb(5, "Lade CSV-Daten")
     df_csv = load_csv_projects(csv_path)
@@ -866,21 +980,45 @@ def generate_quarterly_report(
     progress_cb(10, "Lade XML-Daten")
     df_xml = load_xml_times(xml_path)
 
-    selection = determine_quarter(df_xml, requested=requested_quarter)
-    progress_cb(15, f"Wähle Quartal {selection.period}")
+    selection = determine_period(df_xml, requested=requested_quarter)
 
-    year = selection.period.year
-    quarter_num = selection.period.quarter
-    out_path = output_dir / f"Q{quarter_num}-{year}.xlsx"
+    # Generate filename and determine parameters based on selection type
+    if isinstance(selection, CustomPeriodSelection):
+        progress_cb(15, f"Wähle Zeitraum {selection.label}")
+        # Custom period: use sanitized date range for filename
+        start_str = selection.start_date.strftime('%Y%m%d')
+        end_str = selection.end_date.strftime('%Y%m%d')
+        out_path = output_dir / f"Report_{start_str}-{end_str}.xlsx"
 
-    result = build_quarterly_report(
-        df_csv=df_csv,
-        df_xml=df_xml,
-        target_quarter=selection.period,
-        months=selection.months,
-        out_path=out_path,
-        progress_cb=progress_cb,
-    )
+        result = build_quarterly_report(
+            df_csv=df_csv,
+            df_xml=df_xml,
+            target_quarter=None,  # Not used for custom periods
+            months=selection.months,
+            out_path=out_path,
+            progress_cb=progress_cb,
+            period_label=selection.label,
+            start_date=selection.start_date,
+            end_date=selection.end_date,
+        )
+    else:
+        # Quarterly report (QuarterSelection)
+        progress_cb(15, f"Wähle Quartal {selection.period}")
+        year = selection.period.year
+        quarter_num = selection.period.quarter
+        out_path = output_dir / f"Q{quarter_num}-{year}.xlsx"
+
+        result = build_quarterly_report(
+            df_csv=df_csv,
+            df_xml=df_xml,
+            target_quarter=selection.period,
+            months=selection.months,
+            out_path=out_path,
+            progress_cb=progress_cb,
+            period_label=str(selection.period),
+            start_date=None,
+            end_date=None,
+        )
 
     progress_cb(100, "Fertig")
     return result
@@ -889,8 +1027,13 @@ def generate_quarterly_report(
 __all__ = [
     "generate_quarterly_report",
     "determine_quarter",
+    "determine_period",
+    "determine_custom_period",
     "list_available_quarters",
     "parse_quarter",
+    "parse_custom_period",
+    "QuarterSelection",
+    "CustomPeriodSelection",
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]
