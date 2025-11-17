@@ -12,8 +12,19 @@
     </button>
     <main class="container">
       <h1>Quartalsreport Generator</h1>
+
+      <!-- Report Type Selector -->
       <section class="card">
-        <form id="upload-form">
+        <h2>Report-Konfiguration</h2>
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="standard">Standard Quartalsreport</button>
+          <button class="tab-btn" data-tab="flexible">Flexibler Report</button>
+        </div>
+      </section>
+
+      <!-- Standard Quarterly Report Form -->
+      <section id="standard-form" class="card tab-content active">
+        <form id="upload-form-standard">
           <div class="field">
             <label for="csv-file">CSV (Soll/Ist)</label>
             <input id="csv-file" name="csv_file" type="file" accept=".csv" required />
@@ -26,7 +37,142 @@
             <label for="quarter">Quartal (optional, z. B. 2025Q3)</label>
             <input id="quarter" name="quarter" type="text" placeholder="Auto-Auswahl" />
           </div>
-          <button id="submit-btn" type="submit">Report erzeugen</button>
+          <button id="submit-btn-standard" type="submit">Report erzeugen</button>
+        </form>
+      </section>
+
+      <!-- Flexible Report Form -->
+      <section id="flexible-form" class="card tab-content">
+        <form id="upload-form-flexible">
+          <!-- File Uploads -->
+          <div class="form-section">
+            <h3>Dateien</h3>
+            <div class="field">
+              <label for="csv-file-flex">CSV (Soll/Ist)</label>
+              <input id="csv-file-flex" name="csv_file" type="file" accept=".csv" required />
+            </div>
+            <div class="field">
+              <label for="xml-file-flex">XML (Zeiteinträge)</label>
+              <input id="xml-file-flex" name="xml_file" type="file" accept=".xml" required />
+            </div>
+          </div>
+
+          <!-- Report Type -->
+          <div class="form-section">
+            <h3>Report-Typ</h3>
+            <div class="field">
+              <label for="report-type">Typ</label>
+              <select id="report-type" name="report_type" required>
+                <option value="quarterly">Quartalsreport</option>
+                <option value="custom_period" selected>Benutzerdefinierter Zeitraum</option>
+                <option value="monthly">Monatsreport</option>
+                <option value="yearly">Jahresreport</option>
+                <option value="project">Projekt-Zusammenfassung</option>
+                <option value="employee">Mitarbeiter-Zusammenfassung</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Date Range -->
+          <div class="form-section">
+            <h3>Zeitraum</h3>
+            <div class="field-group">
+              <div class="field">
+                <label for="start-date">Von</label>
+                <input id="start-date" name="start_date" type="date" required />
+              </div>
+              <div class="field">
+                <label for="end-date">Bis</label>
+                <input id="end-date" name="end_date" type="date" required />
+              </div>
+            </div>
+          </div>
+
+          <!-- Time Grouping -->
+          <div class="form-section">
+            <h3>Zeitliche Gliederung</h3>
+            <div class="field">
+              <label for="time-grouping">Gliederung</label>
+              <select id="time-grouping" name="time_grouping" required>
+                <option value="monthly">Nach Monaten getrennt</option>
+                <option value="period" selected>Ein zusammenhängender Block</option>
+                <option value="weekly">Nach Wochen</option>
+                <option value="none">Keine Gliederung (Gesamtsumme)</option>
+              </select>
+            </div>
+            <p class="help-text">
+              <strong>Nach Monaten:</strong> Separate Blöcke für jeden Monat<br>
+              <strong>Ein Block:</strong> z.B. "15.08-15.09" als ein Block<br>
+              <strong>Nach Wochen:</strong> Wochenweise Unterteilung<br>
+              <strong>Keine Gliederung:</strong> Nur Gesamtsumme
+            </p>
+          </div>
+
+          <!-- Optional Filters -->
+          <div class="form-section">
+            <h3>Filter (optional)</h3>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="filter-projects" name="filter_projects" />
+                Nur bestimmte Projekte
+              </label>
+              <div id="project-filter-section" class="filter-section hidden">
+                <input
+                  type="text"
+                  id="projects"
+                  name="projects"
+                  placeholder="Projekt-Codes kommagetrennt, z.B. 0283.05, 0299.02"
+                />
+                <p class="help-text">Mehrere Projekte mit Komma trennen</p>
+              </div>
+            </div>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="filter-employees" name="filter_employees" />
+                Nur bestimmte Mitarbeiter
+              </label>
+              <div id="employee-filter-section" class="filter-section hidden">
+                <input
+                  type="text"
+                  id="employees"
+                  name="employees"
+                  placeholder="Namen kommagetrennt, z.B. C. Trapp SV, A. Kokott"
+                />
+                <p class="help-text">Mehrere Mitarbeiter mit Komma trennen</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Report Options -->
+          <div class="form-section">
+            <h3>Report-Optionen</h3>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="include-bonus" name="include_bonus_calc" checked />
+                Bonus-Berechnung einschließen
+              </label>
+            </div>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="include-budget" name="include_budget_overview" checked />
+                Budget-Übersicht einschließen
+              </label>
+            </div>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="include-summary" name="include_summary_sheet" checked />
+                Zusammenfassungsblatt einschließen
+              </label>
+            </div>
+            <div class="field">
+              <label>
+                <input type="checkbox" id="exclude-special" name="exclude_special_projects" />
+                Sonderprojekte (0000, 0.1000) ausschließen
+              </label>
+            </div>
+          </div>
+
+          <button id="submit-btn-flexible" type="submit">Flexiblen Report erzeugen</button>
         </form>
       </section>
 
@@ -49,6 +195,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js"></script>
+    <script src="/static/app-flexible.js"></script>
   </body>
 </html>

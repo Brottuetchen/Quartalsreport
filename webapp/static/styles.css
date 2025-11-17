@@ -13,6 +13,10 @@
   --error-bg: #fee2e2;
   --error-border: #fca5a5;
   --error-text: #991b1b;
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-secondary: #e5e7eb;
+  --accent-secondary-hover: #d1d5db;
 }
 
 [data-theme="dark"] {
@@ -27,6 +31,8 @@
   --error-bg: #7f1d1d;
   --error-border: #991b1b;
   --error-text: #fecaca;
+  --accent-secondary: #334155;
+  --accent-secondary-hover: #475569;
 }
 
 body {
@@ -69,14 +75,38 @@ label {
 }
 
 input[type="text"],
-input[type="file"] {
+input[type="file"],
+select,
+input[type="date"] {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 0.5rem;
   background: var(--bg-secondary);
   color: var(--text-primary);
   transition: background-color 0.3s ease, border-color 0.3s ease;
+  font-family: inherit;
+  font-size: 1rem;
 }
+
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1.5em 1.5em;
+  padding-right: 2.5rem;
+}
+
+[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+}
+
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+
 
 input[type="text"]::placeholder {
   color: var(--text-secondary);
@@ -84,7 +114,7 @@ input[type="text"]::placeholder {
 
 button,
 a#download-link {
-  background: #2563eb;
+  background: var(--accent-primary);
   color: #ffffff;
   border: none;
   padding: 0.625rem 1.5rem;
@@ -97,6 +127,12 @@ a#download-link {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  transition: background-color 0.2s ease;
+}
+
+button:hover,
+a#download-link:hover {
+  background: var(--accent-primary-hover);
 }
 
 button:disabled {
@@ -149,7 +185,11 @@ button:disabled {
 }
 
 #reset-btn {
-  background: #334155;
+  background: var(--accent-secondary);
+  color: var(--text-primary);
+}
+#reset-btn:hover {
+  background: var(--accent-secondary-hover);
 }
 
 /* Dark Mode Toggle */
@@ -158,6 +198,7 @@ button:disabled {
   top: 1rem;
   right: 1rem;
   background: var(--bg-secondary);
+  color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: 999px;
   padding: 0.5rem 1rem;
@@ -192,6 +233,94 @@ button:disabled {
     right: 0.5rem;
     padding: 0.4rem 0.8rem;
     font-size: 1rem;
+  }
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  border-color: var(--accent-primary);
+}
+
+.tab-btn.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: white;
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* Form sections */
+.form-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.form-section:last-child {
+  border-bottom: none;
+}
+
+.form-section h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.help-text {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.filter-section {
+  margin-top: 0.5rem;
+  margin-left: 1.5rem;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  border-radius: 0.375rem;
+}
+
+.filter-section input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Responsive field group */
+@media (max-width: 600px) {
+  .field-group {
+    grid-template-columns: 1fr;
   }
 }
 

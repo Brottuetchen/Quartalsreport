@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -254,6 +255,9 @@ def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, 
         rate_cad = None
         rate_adm = None
 
+        # Sollstunden von Untermeilensteinen aufsummieren
+        total_sub_sollstunden = 0.0
+
         # Suche nach Unterpositionen mit SV/CAD/ADM
         # Nächste Zeilen nach dem Obermeilenstein durchsuchen
         for sub_idx in range(idx + 1, min(idx + 80, len(df))):
@@ -265,6 +269,11 @@ def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, 
             sub_honorar = str(sub_row.get("Honorarbereich", "")).strip().upper()
             if sub_honorar == "X":
                 break  # nächster Obermeilenstein erreicht
+
+            # Sollstunden aufsummieren (für alle Untermeilensteine)
+            sub_sollstunden_val = de_to_float(sub_row.get("Sollstunden Budget", 0))
+            if sub_sollstunden_val > 0:
+                total_sub_sollstunden += sub_sollstunden_val
 
             # Extrahiere Position
             if "'   SV" in sub_arbeitspaket or "'   S V" in sub_arbeitspaket:
@@ -335,6 +344,8 @@ def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, 
             if rate_adm is None:
                 rate_adm = default_rate
 
+        effective_sollstunden = total_sub_sollstunden if total_sub_sollstunden > 0 else sollstunden
+
         main_key = (projekt, ober_norm)
         if main_key not in added_budget_keys:
             budget_rows.append({
@@ -346,7 +357,7 @@ def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, 
                 "Gesamtbudget": sollhonor,
                 "Abgerechnet": verrechnete_honorare,
                 "Istkosten": istkosten,
-                "Sollstunden": sollstunden,
+                "Sollstunden": effective_sollstunden,
                 "Iststunden": iststunden,
                 "Stundensatz_SV": rate_sv,
                 "Stundensatz_CAD": rate_cad,
@@ -524,13 +535,14 @@ def _create_project_budget_sheet(
         "Projekt",
         "Obermeilenstein",
         "Abrechnungsart",
+        "Sollstunden Budget (h)",
         "Status",
-        "Gesamtbudget (�'�)",
-        "Abgerechnet (�'�)",
-        "Verf�gbar (�'�)",
-        "Stundensatz SV (�'�/h)",
-        "Stundensatz CAD (�'�/h)",
-        "Stundensatz ADM (�'�/h)",
+        "Gesamtbudget (€)",
+        "Abgerechnet (€)",
+        "Verfügbar (€)",
+        "Stundensatz SV (€/h)",
+        "Stundensatz CAD (€/h)",
+        "Stundensatz ADM (€/h)",
         "Bemerkung",
         "_LookupId",
     ]
@@ -549,6 +561,7 @@ def _create_project_budget_sheet(
         projekt = row_data["Projekt"]
         obermeilenstein = row_data["Obermeilenstein"]
         billing_type = row_data["Abrechnungsart"]
+        sollstunden = row_data.get("Sollstunden", 0)
         gesamtbudget = row_data["Gesamtbudget"]
         abgerechnet = row_data["Abgerechnet"]
         rate_sv = row_data["Stundensatz_SV"]
@@ -569,7 +582,7 @@ def _create_project_budget_sheet(
             status = "⚠ Manual erforderlich"
 
         # Verfügbar als Formel
-        verfuegbar_formula = f"=E{current_row}-F{current_row}"
+        verfuegbar_formula = f"=F{current_row}-G{current_row}"
 
         # Bemerkung generieren
         bemerkung = []
@@ -583,6 +596,7 @@ def _create_project_budget_sheet(
             projekt,
             obermeilenstein,
             billing_type,
+            sollstunden if sollstunden > 0 else "",
             status,
             gesamtbudget if gesamtbudget > 0 else "",
             abgerechnet if abgerechnet > 0 else 0,
@@ -609,8 +623,12 @@ def _create_project_budget_sheet(
                     cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
                     cell.font = Font(color='9C0006', bold=True)
 
-            # Status Spalte (Spalte D)
+            # Sollstunden Spalte (Spalte D)
             if col_idx == 4:
+                cell.number_format = '#,##0.00'
+
+            # Status Spalte (Spalte E)
+            if col_idx == 5:
                 if status.startswith("⚠"):
                     cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
                     cell.font = Font(color='9C5700', bold=True)
@@ -618,11 +636,17 @@ def _create_project_budget_sheet(
                     cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
                     cell.font = Font(color='006100', bold=True)
 
-            # Budget-Spalten (E, F, G)
-            if col_idx in [5, 6, 7]:
+            # Budget-Spalten (F, G, H)
+            if col_idx in [6, 7, 8]:
                 cell.number_format = '#,##0.00'
 
-            # Stundensatz-Spalten (H, I, J) - Gelb markieren wenn leer
+            # Stundensatz-Spalten (I, J, K) - Gelb markieren wenn leer
+            if col_idx in [9, 10, 11]:
+                cell.number_format = '#,##0.00'
+                if cell.value == "":
+                    cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+
+            # Stundensatz-Spalten (I, J, K) - Gelb markieren wenn leer
             if col_idx in [8, 9, 10]:
                 cell.number_format = '#,##0.00'
                 if cell.value == "":
@@ -632,23 +656,24 @@ def _create_project_budget_sheet(
 
     # Enable filter row and freeze panes for easier navigation
     if current_row > data_start_row:
-        ws.auto_filter.ref = f"A{header_row}:L{current_row - 1}"
+        ws.auto_filter.ref = f"A{header_row}:M{current_row - 1}"
     ws.freeze_panes = f"A{data_start_row}"
 
     # Column widths
     ws.column_dimensions['A'].width = 50
     ws.column_dimensions['B'].width = 50
     ws.column_dimensions['C'].width = 18
-    ws.column_dimensions['D'].width = 20
-    ws.column_dimensions['E'].width = 18
+    ws.column_dimensions['D'].width = 18
+    ws.column_dimensions['E'].width = 20
     ws.column_dimensions['F'].width = 18
     ws.column_dimensions['G'].width = 18
-    ws.column_dimensions['H'].width = 22
+    ws.column_dimensions['H'].width = 18
     ws.column_dimensions['I'].width = 22
     ws.column_dimensions['J'].width = 22
-    ws.column_dimensions['K'].width = 40
-    ws.column_dimensions['L'].width = 3
-    ws.column_dimensions['L'].hidden = True
+    ws.column_dimensions['K'].width = 22
+    ws.column_dimensions['L'].width = 40
+    ws.column_dimensions['M'].width = 3
+    ws.column_dimensions['M'].hidden = True
 
 
 def _create_cover_sheet(
@@ -657,6 +682,7 @@ def _create_cover_sheet(
     months: Iterable[pd.Period],
     employee_summary_data: Dict,
     border: Border,
+    report_title: Optional[str] = None,
 ) -> None:
     """Creates a cover sheet with summary totals across all employees."""
 
@@ -664,7 +690,8 @@ def _create_cover_sheet(
     ws = wb.create_sheet(title="Übersicht", index=0)
 
     # Title
-    ws.append([f"Quartalsübersicht {target_quarter} - Zusammenfassung aller Mitarbeiter"])
+    title = report_title if report_title else f"Quartalsübersicht {target_quarter}"
+    ws.append([f"{title} - Zusammenfassung aller Mitarbeiter"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([])
 
@@ -778,6 +805,89 @@ def _create_cover_sheet(
     ws.column_dimensions['D'].width = 35
 
 
+def _add_vba_macro(xlsx_path: Path, progress_cb: ProgressCallback) -> Path:
+    """
+    Adds VBA macro to Excel file and converts it to .xlsm format.
+    Uses Windows COM automation to embed the macro.
+    """
+    try:
+        import win32com.client
+    except ImportError:
+        # If pywin32 is not available, return original path
+        progress_cb(99, "pywin32 nicht verfügbar - überspringe VBA-Einbettung")
+        return xlsx_path
+
+    xlsm_path = xlsx_path.with_suffix('.xlsm')
+    vba_file = Path(__file__).parent / 'export_macro.vba'
+
+    if not vba_file.exists():
+        progress_cb(99, "VBA-Datei nicht gefunden - überspringe Makro-Einbettung")
+        return xlsx_path
+
+    try:
+        # Start Excel application
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        # Open the workbook
+        wb = excel.Workbooks.Open(str(xlsx_path.absolute()))
+
+        # Read VBA code
+        with open(vba_file, 'r', encoding='utf-8') as f:
+            vba_code = f.read()
+
+        # Try to access VBProject - this will fail if VBA access is disabled
+        try:
+            vb_project = wb.VBProject
+        except Exception as e:
+            raise Exception(
+                "VBA-Zugriff ist in Excel deaktiviert. "
+                "Bitte aktiviere unter: Datei → Optionen → Trust Center → "
+                "Trust Center-Einstellungen → Makroeinstellungen → "
+                "'Zugriff auf das VBA-Projektobjektmodell vertrauen'"
+            ) from e
+
+        # Add VBA module
+        vb_module = wb.VBProject.VBComponents.Add(1)  # 1 = vbext_ct_StdModule
+        vb_module.CodeModule.AddFromString(vba_code)
+
+        # Add button to cover sheet (named "Übersicht")
+        cover_sheet = wb.Worksheets(1)  # First sheet is the cover sheet
+
+        # Add button at position G4                                 
+        button = cover_sheet.Buttons().Add(
+            Left=cover_sheet.Range("G4").Left,
+            Top=cover_sheet.Range("G4").Top,
+            Width=250,
+            Height=30
+        )
+        button.OnAction = "ExportMitarbeiterSheets"
+        button.Caption = "Mitarbeiter-Sheets exportieren"
+        button.Font.Bold = True
+        button.Font.Size = 11
+
+        # Save as xlsm
+        wb.SaveAs(str(xlsm_path.absolute()), FileFormat=52)  # 52 = xlOpenXMLWorkbookMacroEnabled
+        wb.Close(SaveChanges=False)
+        excel.Quit()
+
+        # Delete original xlsx file
+        xlsx_path.unlink()
+
+        progress_cb(99, "VBA-Makro erfolgreich hinzugefügt")
+        return xlsm_path
+
+    except Exception as e:
+        progress_cb(99, f"Fehler beim Hinzufügen des VBA-Makros: {e}")
+        try:
+            wb.Close(SaveChanges=False)
+            excel.Quit()
+        except:
+            pass
+        return xlsx_path
+
+
 def build_quarterly_report(
     df_csv: pd.DataFrame,
     df_budget: pd.DataFrame,
@@ -787,10 +897,16 @@ def build_quarterly_report(
     months: Iterable[pd.Period],
     out_path: Path,
     progress_cb: ProgressCallback = _noop_progress,
+    report_title: Optional[str] = None,
+    use_quarter_filter: bool = True,
+    add_vba: bool = True,
 ) -> Path:
     """Erstellt Quartals-Excel mit Monats-Tabellen + Quartalsübersicht."""
 
-    df_quarter = df_xml[df_xml["quarter"] == target_quarter].copy()
+    if use_quarter_filter:
+        df_quarter = df_xml[df_xml["quarter"] == target_quarter].copy()
+    else:
+        df_quarter = df_xml.copy()
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -803,6 +919,7 @@ def build_quarterly_report(
 
     # Build lookup for each Obermeilenstein (no aggregation across a project)
     budget_lookup: Dict[Tuple[str, str], Dict[str, float]] = {}
+    lookup_id_to_budget: Dict[int, Dict[str, float]] = {}
 
     def _proj_keys_for_lookup(name: str) -> List[str]:
         if name is None:
@@ -830,9 +947,12 @@ def build_quarterly_report(
             "Abrechnungsart": str(row.get("Abrechnungsart") or "").strip(),
             "LookupId": int(row.get("_LookupId") or 0),
             "Obermeilenstein_norm": ober_norm,
+            "Sollstunden": float(row.get("Sollstunden") or 0.0),
         }
         for key in _proj_keys_for_lookup(projekt):
             budget_lookup[(key, ober_norm)] = budget_data
+        if budget_data["LookupId"]:
+            lookup_id_to_budget[budget_data["LookupId"]] = budget_data
             if budget_data["LookupId"]:
                 lookup_id_map[(key, ober_norm)] = budget_data["LookupId"]
 
@@ -860,18 +980,21 @@ def build_quarterly_report(
     def _build_lookup_expr(col_letter: str, primary_id: Optional[int], fallback_id: Optional[int]) -> str:
         def _index_expr(lookup_id: int) -> str:
             return (
-                f"IFERROR(INDEX('Projekt-Budget-Übersicht'!${col_letter}:${col_letter},"
-                f"MATCH({lookup_id},'Projekt-Budget-Übersicht'!$L:$L,0)),0)"
+                f"INDEX('Projekt-Budget-Übersicht'!${col_letter}:${col_letter},"
+                f"MATCH({lookup_id},'Projekt-Budget-Übersicht'!$L:$L,0))"
             )
+
+        def _safe_expr(lookup_id: int) -> str:
+            return f"IFERROR({_index_expr(lookup_id)},0)"
 
         if primary_id is None:
             if fallback_id is not None:
-                return _index_expr(fallback_id)
+                return _safe_expr(fallback_id)
             return "0"
 
-        primary_expr = _index_expr(primary_id)
+        primary_expr = _safe_expr(primary_id)
         if fallback_id is not None:
-            fallback_expr = _index_expr(fallback_id)
+            fallback_expr = _safe_expr(fallback_id)
             return f"IF({primary_expr}=0,{fallback_expr},{primary_expr})"
         return primary_expr
 
@@ -978,6 +1101,12 @@ def build_quarterly_report(
         total_bonus_hours_quarter = 0.0
         total_bonus_special_hours_quarter = 0.0
 
+        # Track monthly summary row coordinates for quarterly summaries
+        monthly_sum_total_cells = []
+        monthly_assigned_from_others_cells = []
+        monthly_bonus_base_cells = []  # Track G cells for bonus basis
+        monthly_special_base_cells = []  # Track G cells for special bonus basis
+
         for month in months:
             df_month = df_quarter[(df_quarter["period"] == month) & (df_quarter["staff_name"] == emp)].copy()
 
@@ -1065,7 +1194,7 @@ def build_quarterly_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Kosten (€)", "Umsatz kumuliert (€)"])
+            ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", f"{month_str} (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Möglicher Umsatz (€)", "Entgangener Umsatz (€)", "Umsatz kumuliert (€)", "Soll Obermeilenstein (h)", "Budget Gesamt (€)", "Kosten (€)", "Rechnung", "Kommentar"])
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
                 cell.border = border
@@ -1099,14 +1228,26 @@ def build_quarterly_report(
                     color_percentage = 0.0
 
                     if ms_type == "monthly":
-                        soll_value = float(row_data.get("Soll") or 0.0)
                         csv_ist_total = float(row_data.get("Ist") or 0.0)
                         ms_name = row_data["Meilenstein"]
 
-                        # For 0000-projects with MONTHLY_BUDGETS: IST = current month hours (no backward calc)
-                        if is_special_project and ms_name in MONTHLY_BUDGETS:
-                            ist_display = hours_value
+                        # For 0000-projects: use per-employee budget, not cumulative
+                        if is_special_project:
+                            # Check MONTHLY_BUDGETS first
+                            if ms_name in MONTHLY_BUDGETS:
+                                soll_value = MONTHLY_BUDGETS[ms_name]
+                                ist_display = hours_value
+                            else:
+                                # Try to extract from name
+                                hours, unit = extract_budget_from_name(ms_name)
+                                if unit == "monat" and hours is not None:
+                                    soll_value = hours
+                                    ist_display = hours_value
+                                else:
+                                    soll_value = float(row_data.get("Soll") or 0.0)
+                                    ist_display = hours_value
                         else:
+                            soll_value = float(row_data.get("Soll") or 0.0)
                             # For normal projects: backward calculation from CSV IST
                             # Using ALL EMPLOYEES' future hours to ensure consistent IST across all employees
                             # Last month: IST = CSV_IST
@@ -1138,9 +1279,14 @@ def build_quarterly_report(
                             None,  # Von anderen (K) - will be filled with formula
                             None,  # Stundensatz (L) - Formula will be added later
                             None,  # Umsatz (M) - Formula will be added later
-                            None,  # Budget Gesamt (N) - Formula will be added later
-                            None,  # Kosten (O) - From CSV
+                            None,  # Möglicher Umsatz (N) - Formula will be added later
+                            None,  # Entgangener Umsatz (O) - Formula will be added later: =N-M
                             None,  # Umsatz kumuliert (P) - Formula will be added later
+                            None,  # Soll Obermeilenstein (Q) - Formula will be added later
+                            None,  # Budget Gesamt (R) - Formula will be added later
+                            None,  # Kosten (S) - From CSV
+                            None,  # Rechnung (T) - Dropdown will be added later
+                            None,  # Kommentar (U) - Empty field for user input
                         ])
                     else:
                         q_soll = float(row_data.get("QuartalsSoll", 0.0) or 0.0)
@@ -1237,11 +1383,11 @@ def build_quarterly_report(
                         rate_formula = (
                             f'=IF($B$2="-",0,'
                             f'IFERROR(INDEX('
-                            f'IF($B$2="SV",\'Projekt-Budget-Übersicht\'!$H:$H,'
-                            f'IF($B$2="CAD",\'Projekt-Budget-Übersicht\'!$I:$I,'
-                            f'IF($B$2="ADM",\'Projekt-Budget-Übersicht\'!$J:$J,'
-                            f'\'Projekt-Budget-Übersicht\'!$H:$H))),'  # Default to SV/Pauschale
-                            f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$L:$L,0)),0))'
+                            f'IF($B$2="SV",\'Projekt-Budget-Übersicht\'!$I:$I,'
+                            f'IF($B$2="CAD",\'Projekt-Budget-Übersicht\'!$J:$J,'
+                            f'IF($B$2="ADM",\'Projekt-Budget-Übersicht\'!$K:$K,'
+                            f'\'Projekt-Budget-Übersicht\'!$I:$I))),'  # Default to SV/Pauschale
+                            f'MATCH({lookup_id},\'Projekt-Budget-Übersicht\'!$M:$M,0)),0))'
                         )
                     else:
                         rate_formula = "=IF($B$2=\"-\",0,0)"
@@ -1253,29 +1399,69 @@ def build_quarterly_report(
                     billing_type = (resolved_budget.get("Abrechnungsart", "").strip()
                                     if resolved_budget else "")
 
-                    # Umsatz cell (column M) - Formula depends on Abrechnungsart
+                    # Umsatz cell (column M) - Formula reads Abrechnungsart from column C dynamically
+                    # Rules: 1) No adjustments (I) in revenue calculation
+                    #        2) Pauschale: Revenue capped at remaining budget up to 100%
+                    #        3) Nachweis: ALWAYS full amount (hourly rate × hours worked)
                     revenue_cell = ws.cell(row=current_row, column=13)
                     revenue_cell.number_format = '#,##0.00'
-                    if billing_type == "Pauschale":
-                        revenue_formula = (
-                            f'=IF($B$2="-",0,IF(OR(N{current_row}=0,N(D{current_row})=0),0,'
-                            f'N{current_row}*((N(F{current_row})+N(I{current_row})+N(K{current_row}))/N(D{current_row}))))'
-                        )
-                    else:
-                        revenue_formula = (
-                            f'=IF($B$2="-",0,L{current_row}*('
-                            f'N(F{current_row})+N(I{current_row})+N(K{current_row})))'
-                        )
+                    # Dynamic formula that checks column C (Abrechnungsart)
+                    # For Pauschale: MIN(monthly proportional revenue, remaining budget until 100%)
+                    revenue_formula = (
+                        f'=IF($B$2="-",0,'
+                        f'IF(C{current_row}="Pauschale",'
+                        f'IF(OR(R{current_row}=0,N(D{current_row})=0),0,'
+                        f'MAX(0,MIN(R{current_row}*((N(F{current_row})+N(K{current_row}))/N(D{current_row})),'
+                        f'R{current_row}-R{current_row}*(N(E{current_row})/N(D{current_row}))))),'
+                        f'L{current_row}*(N(F{current_row})+N(K{current_row}))))'
+                    )
                     revenue_cell.value = revenue_formula
 
-                    # Budget Gesamt cell (column N) - Lookup via Schlüssel
-                    budget_total_cell = ws.cell(row=current_row, column=14)
+                    # Möglicher Umsatz cell (column N) - Same formula but WITHOUT >100% check
+                    # Shows what COULD be billed (without >100% restriction for Pauschale)
+                    possible_revenue_cell = ws.cell(row=current_row, column=14)
+                    possible_revenue_cell.number_format = '#,##0.00'
+                    possible_revenue_formula = (
+                        f'=IF($B$2="-",0,'
+                        f'IF(C{current_row}="Pauschale",'
+                        f'IF(OR(R{current_row}=0,N(D{current_row})=0),0,'
+                        f'R{current_row}*((N(F{current_row})+N(K{current_row}))/N(D{current_row}))),'
+                        f'L{current_row}*(N(F{current_row})+N(K{current_row}))))'
+                    )
+                    possible_revenue_cell.value = possible_revenue_formula
+
+                    # Entgangener Umsatz cell (column O) - Difference between Möglicher Umsatz and Umsatz
+                    lost_revenue_cell = ws.cell(row=current_row, column=15)
+                    lost_revenue_cell.number_format = '#,##0.00'
+                    lost_revenue_cell.value = f"=N{current_row}-M{current_row}"
+
+                    # Umsatz kumuliert cell (column P) - Placeholder, will be filled in second pass
+                    budget_earned_cell = ws.cell(row=current_row, column=16)
+                    budget_earned_cell.number_format = '#,##0.00'
+                    budget_earned_cell.value = 0
+
+                    # Soll Obermeilenstein cell (column Q) - direct value from resolved budget (fallback to parent)
+                    soll_obermeilenstein_cell = ws.cell(row=current_row, column=17)
+                    soll_obermeilenstein_cell.number_format = '#,##0.00'
+                    budget_record = resolved_budget
+                    if not budget_record and lookup_primary_id:
+                        budget_record = lookup_id_to_budget.get(lookup_primary_id)
+                    if not budget_record and lookup_fallback_id:
+                        budget_record = lookup_id_to_budget.get(lookup_fallback_id)
+                    if budget_record:
+                        soll_val = float(budget_record.get("Sollstunden") or 0.0)
+                        soll_obermeilenstein_cell.value = soll_val if soll_val != 0 else ""
+                    else:
+                        soll_obermeilenstein_cell.value = ""
+
+                    # Budget Gesamt cell (column R) - Lookup via Schlüssel
+                    budget_total_cell = ws.cell(row=current_row, column=18)
                     budget_total_cell.number_format = '#,##0.00'
-                    budget_expr = _build_lookup_expr("E", lookup_primary_id, lookup_fallback_id)
+                    budget_expr = _build_lookup_expr("F", lookup_primary_id, lookup_fallback_id)
                     budget_total_cell.value = f"={budget_expr}"
 
-                    # Kosten cell (column O) - Real costs (Istkosten) from CSV
-                    budget_ist_cell = ws.cell(row=current_row, column=15)
+                    # Kosten cell (column S) - Real costs (Istkosten) from CSV
+                    budget_ist_cell = ws.cell(row=current_row, column=19)
                     budget_ist_cell.number_format = '#,##0.00'
                     if resolved_budget:
                         istkosten_value = resolved_budget.get("Istkosten", 0) or 0
@@ -1283,10 +1469,15 @@ def build_quarterly_report(
                     else:
                         budget_ist_cell.value = ""
 
-                    # Umsatz kumuliert cell (column P) - Placeholder, will be filled in second pass
-                    budget_earned_cell = ws.cell(row=current_row, column=16)
-                    budget_earned_cell.number_format = '#,##0.00'
-                    budget_earned_cell.value = 0
+                    # Rechnung cell (column T) - Dropdown with SR/AZ options
+                    rechnung_cell = ws.cell(row=current_row, column=20)
+                    rechnung_dv = DataValidation(type="list", formula1='"SR,AZ"', allow_blank=True)
+                    rechnung_dv.add(rechnung_cell)
+                    ws.add_data_validation(rechnung_dv)
+
+                    # Kommentar cell (column U) - Empty field for user input
+                    kommentar_cell = ws.cell(row=current_row, column=21)
+                    # Leave empty for user input
 
                     # Track row for this project/milestone/month combination
                     track_key = (row_data["proj_norm"], row_data["ms_norm"], month)
@@ -1321,7 +1512,7 @@ def build_quarterly_report(
 
             sum_hours = month_data["hours"].sum()
             total_hours_all_months += sum_hours
-            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", "", "", "", ""])
+            ws.append(["", "Summe", "", "", "", round(sum_hours, 2), "", "", "", "", "", "", "", "", "", ""])
             sum_row_idx = current_row
             for cell in ws[current_row]:
                 cell.font = Font(bold=True)
@@ -1329,6 +1520,36 @@ def build_quarterly_report(
             sum_total_cell = ws.cell(row=sum_row_idx, column=6)
             sum_total_cell.number_format = "0.00"
             sum_total_cell.value = round(sum_hours, 2)
+
+            # Add sum formulas for Umsatz (M), Möglicher Umsatz (N), Entgangener Umsatz (O), and Umsatz kumuliert (P)
+            sum_umsatz_cell = ws.cell(row=sum_row_idx, column=13)  # Column M
+            sum_umsatz_cell.number_format = '#,##0.00'
+            if month_data_start_row <= month_data_end_row:
+                sum_umsatz_cell.value = f"=SUM(M{month_data_start_row}:M{month_data_end_row})"
+            else:
+                sum_umsatz_cell.value = 0
+
+            sum_possible_umsatz_cell = ws.cell(row=sum_row_idx, column=14)  # Column N
+            sum_possible_umsatz_cell.number_format = '#,##0.00'
+            if month_data_start_row <= month_data_end_row:
+                sum_possible_umsatz_cell.value = f"=SUM(N{month_data_start_row}:N{month_data_end_row})"
+            else:
+                sum_possible_umsatz_cell.value = 0
+
+            sum_lost_umsatz_cell = ws.cell(row=sum_row_idx, column=15)  # Column O
+            sum_lost_umsatz_cell.number_format = '#,##0.00'
+            if month_data_start_row <= month_data_end_row:
+                sum_lost_umsatz_cell.value = f"=SUM(O{month_data_start_row}:O{month_data_end_row})"
+            else:
+                sum_lost_umsatz_cell.value = 0
+
+            sum_umsatz_kum_cell = ws.cell(row=sum_row_idx, column=16)  # Column P
+            sum_umsatz_kum_cell.number_format = '#,##0.00'
+            if month_data_start_row <= month_data_end_row:
+                sum_umsatz_kum_cell.value = f"=SUM(P{month_data_start_row}:P{month_data_end_row})"
+            else:
+                sum_umsatz_kum_cell.value = 0
+
             current_row += 1
 
             ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
@@ -1354,6 +1575,8 @@ def build_quarterly_report(
                 bonus_adj_cell.value = 0
                 bonus_adj_cell.number_format = "0.00"
             monthly_bonus_total_cells.append(bonus_total_cell.coordinate)
+            monthly_sum_total_cells.append(sum_total_cell.coordinate)
+            monthly_bonus_base_cells.append(bonus_base_cell.coordinate)
             total_bonus_hours_quarter += bonus_hours_month
             current_row += 1
 
@@ -1380,6 +1603,7 @@ def build_quarterly_report(
                 special_adj_cell.value = 0
                 special_adj_cell.number_format = "0.00"
             monthly_special_bonus_total_cells.append(special_total_cell.coordinate)
+            monthly_special_base_cells.append(special_base_cell.coordinate)
             total_bonus_special_hours_quarter += bonus_hours_month_special
             current_row += 1
 
@@ -1394,6 +1618,7 @@ def build_quarterly_report(
             # Formula will sum all "Von anderen (K)" cells in this month's section
             # This will be filled after all sheets are created
             assigned_from_others_cell.value = 0  # Placeholder
+            monthly_assigned_from_others_cells.append(assigned_from_others_cell.coordinate)
 
             # Track month section info
             month_sections[emp][month] = (month_data_start_row, month_data_end_row, assigned_from_others_row_idx)
@@ -1558,7 +1783,7 @@ def build_quarterly_report(
         quarter_with_csv = quarter_with_csv.drop_duplicates(subset=['proj_norm', 'ms_norm'])
 
         # Header row for quarterly table
-        ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", "Quartal (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Budget Gesamt (€)", "Kosten (€)", "Umsatz kumuliert (€)"])
+        ws.append(["Projekt", "Meilenstein", "Abrechnungsart", "Soll (h)", "Ist (h)", "Quartal (h)", "%", "Bonus-Anpassung (h)", "Differenz (h)", "Zuordnen an", "Von anderen (h)", "Stundensatz (€/h)", "Umsatz (€)", "Möglicher Umsatz (€)", "Entgangener Umsatz (€)", "Umsatz kumuliert (€)", "Budget Gesamt (€)", "Kosten (€)"])
         for cell in ws[current_row]:
             cell.font = Font(bold=True)
             cell.border = border
@@ -1567,6 +1792,10 @@ def build_quarterly_report(
         quarter_data_start_row = current_row
         adjustment_cells_regular_q = []
         adjustment_cells_special_q = []
+
+        # Track F-column rows for regular and special projects (for base calculation)
+        regular_project_rows = []
+        special_project_rows = []
 
         # Track row assignments for quarterly "Von anderen" formulas
         # Format: {(proj_norm, ms_norm): row_number}
@@ -1589,8 +1818,27 @@ def build_quarterly_report(
                 meilenstein_name = row_data["ms_norm"]
                 resolved_budget = _resolve_budget_data(projekt_name, meilenstein_name)
 
-                q_soll = float(row_data.get("Soll", 0.0) or 0.0)
-                ist_value = float(row_data.get("Ist", 0.0) or 0.0)
+                # For 0000 projects, calculate Soll per employee (not cumulative)
+                if is_special_project:
+                    milestone_full_name = row_data.get("Meilenstein", "")
+                    # Check if it's a quarterly or monthly 0000 milestone
+                    hours, unit = extract_budget_from_name(milestone_full_name)
+                    if unit == "quartal" and hours is not None:
+                        q_soll = hours
+                    elif unit == "monat" and hours is not None:
+                        q_soll = hours * 3  # Monthly budget * 3 months
+                    elif milestone_full_name in QUARTERLY_BUDGETS:
+                        q_soll = QUARTERLY_BUDGETS[milestone_full_name]
+                    elif milestone_full_name in MONTHLY_BUDGETS:
+                        q_soll = MONTHLY_BUDGETS[milestone_full_name] * 3
+                    else:
+                        q_soll = 0.0
+                    # Ist is the sum of hours from XML for this employee
+                    ist_value = hours_value
+                else:
+                    q_soll = float(row_data.get("Soll", 0.0) or 0.0)
+                    ist_value = float(row_data.get("Ist", 0.0) or 0.0)
+
                 prozent = (ist_value / q_soll * 100.0) if q_soll > 0 else 0.0
 
                 should_color = q_soll > 0
@@ -1602,7 +1850,7 @@ def build_quarterly_report(
                     None,  # Abrechnungsart (C) - Formula will be added later
                     round(q_soll, 2) if q_soll > 0 else "-",
                     round(ist_value, 2) if ist_value > 0 else 0.0,
-                    round(hours_value, 2),
+                    None,  # Quartal (h) (F) - Will be calculated as sum of monthly F+I+K
                     round(prozent, 2) if q_soll > 0 else "-",
                     None,  # Bonus-Anpassung (H)
                     None,  # Differenz (I)
@@ -1618,13 +1866,27 @@ def build_quarterly_report(
                 for cell in ws[current_row]:
                     cell.border = border
 
-                # Bonus-Anpassung cell (column H)
+                # Bonus-Anpassung cell (column H) - Sum of monthly adjustments for this project/milestone
                 adj_cell = ws.cell(row=current_row, column=8)
                 if is_special_project:
                     adjustment_cells_special_q.append(adj_cell.coordinate)
                 else:
                     adjustment_cells_regular_q.append(adj_cell.coordinate)
                 adj_cell.number_format = "0.00"
+
+                # Collect monthly H values for this project/milestone to sum them
+                monthly_adj_refs = []
+                for month in months:
+                    monthly_key = (projekt_name, meilenstein_name, month)
+                    if monthly_key in row_assignments[emp]:
+                        monthly_row = row_assignments[emp][monthly_key]
+                        monthly_adj_refs.append(f"H{monthly_row}")
+
+                # Set formula to sum monthly adjustments
+                if monthly_adj_refs:
+                    adj_cell.value = f"=SUM({','.join(monthly_adj_refs)})"
+                else:
+                    adj_cell.value = 0
 
                 # Differenz cell (column I)
                 diff_cell = ws.cell(row=current_row, column=9)
@@ -1681,29 +1943,55 @@ def build_quarterly_report(
                 billing_type = (resolved_budget.get("Abrechnungsart", "").strip()
                                 if resolved_budget else "")
 
-                # Umsatz cell (column M)
+                # Umsatz cell (column M) - Formula reads Abrechnungsart from column C dynamically
+                # Rules: 1) No adjustments (I) in revenue calculation
+                #        2) Pauschale: Revenue capped at remaining budget up to 100%
+                #        3) Nachweis: ALWAYS full amount (hourly rate × hours worked)
                 revenue_cell = ws.cell(row=current_row, column=13)
                 revenue_cell.number_format = '#,##0.00'
-                if billing_type == "Pauschale":
-                    revenue_formula = (
-                        f'=IF($B$2="-",0,IF(OR(N{current_row}=0,N(D{current_row})=0),0,'
-                        f'N{current_row}*((N(F{current_row})+N(I{current_row})+N(K{current_row}))/N(D{current_row}))))'
-                    )
-                else:
-                    revenue_formula = (
-                        f'=IF($B$2="-",0,L{current_row}*('
-                        f'N(F{current_row})+N(I{current_row})+N(K{current_row})))'
-                    )
+                # Dynamic formula that checks column C (Abrechnungsart)
+                # For Pauschale: MIN(monthly proportional revenue, remaining budget until 100%)
+                revenue_formula = (
+                    f'=IF($B$2="-",0,'
+                    f'IF(C{current_row}="Pauschale",'
+                    f'IF(OR(Q{current_row}=0,N(D{current_row})=0),0,'
+                    f'MAX(0,MIN(Q{current_row}*((N(F{current_row})+N(K{current_row}))/N(D{current_row})),'
+                    f'Q{current_row}-Q{current_row}*(N(E{current_row})/N(D{current_row}))))),'
+                    f'L{current_row}*(N(F{current_row})+N(K{current_row}))))'
+                )
                 revenue_cell.value = revenue_formula
 
-                # Budget Gesamt cell (column N)
-                budget_total_cell = ws.cell(row=current_row, column=14)
+                # Möglicher Umsatz cell (column N) - Same formula but WITHOUT >100% check
+                # Shows what COULD be billed (without >100% restriction for Pauschale)
+                possible_revenue_cell = ws.cell(row=current_row, column=14)
+                possible_revenue_cell.number_format = '#,##0.00'
+                possible_revenue_formula = (
+                    f'=IF($B$2="-",0,'
+                    f'IF(C{current_row}="Pauschale",'
+                    f'IF(OR(Q{current_row}=0,N(D{current_row})=0),0,'
+                    f'Q{current_row}*((N(F{current_row})+N(K{current_row}))/N(D{current_row}))),'
+                    f'L{current_row}*(N(F{current_row})+N(K{current_row}))))'
+                )
+                possible_revenue_cell.value = possible_revenue_formula
+
+                # Entgangener Umsatz cell (column O) - Difference between Möglicher Umsatz and Umsatz
+                lost_revenue_cell = ws.cell(row=current_row, column=15)
+                lost_revenue_cell.number_format = '#,##0.00'
+                lost_revenue_cell.value = f"=N{current_row}-M{current_row}"
+
+                # Umsatz kumuliert cell (column P) - Placeholder
+                budget_earned_cell = ws.cell(row=current_row, column=16)
+                budget_earned_cell.number_format = '#,##0.00'
+                budget_earned_cell.value = 0
+
+                # Budget Gesamt cell (column Q)
+                budget_total_cell = ws.cell(row=current_row, column=17)
                 budget_total_cell.number_format = '#,##0.00'
                 budget_expr = _build_lookup_expr("E", lookup_primary_id, lookup_fallback_id)
                 budget_total_cell.value = f"={budget_expr}"
 
-                # Kosten cell (column O)
-                budget_ist_cell = ws.cell(row=current_row, column=15)
+                # Kosten cell (column R)
+                budget_ist_cell = ws.cell(row=current_row, column=18)
                 budget_ist_cell.number_format = '#,##0.00'
                 if resolved_budget:
                     istkosten_value = resolved_budget.get("Istkosten", 0) or 0
@@ -1711,17 +1999,18 @@ def build_quarterly_report(
                 else:
                     budget_ist_cell.value = ""
 
-                # Umsatz kumuliert cell (column P) - Placeholder
-                budget_earned_cell = ws.cell(row=current_row, column=16)
-                budget_earned_cell.number_format = '#,##0.00'
-                budget_earned_cell.value = 0
-
                 # Track row for quarterly assignments
                 track_key_q = (row_data["proj_norm"], row_data["ms_norm"])
                 quarter_row_assignments[track_key_q] = current_row
                 quarter_row_assignments_all[emp][track_key_q] = current_row
                 revenue_cells_by_key_q.setdefault(track_key_q, []).append((sheet_name, current_row))
                 revenue_cells_by_key_q_all.setdefault(track_key_q, []).append((sheet_name, current_row))
+
+                # Track rows for base hour calculation
+                if is_special_project:
+                    special_project_rows.append(current_row)
+                else:
+                    regular_project_rows.append(current_row)
 
                 # Color percentage cell
                 if should_color:
@@ -1741,13 +2030,13 @@ def build_quarterly_report(
                                end_row=block_start + block_size - 1, end_column=1)
                 ws.cell(row=block_start, column=1).alignment = Alignment(vertical="top")
 
-        # Quarterly summary rows
+        # Quarterly summary rows - BASED ON MONTHLY SUMMARY ROWS, NOT PROJECT ROWS
         quarter_data_end_row = current_row - 1
 
         ws.append([])
         current_row += 1
 
-        # Sum row
+        # Sum row - Sum of monthly "Summe" rows (total productive hours) + Umsatz sums
         ws.append(["", "Summe", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
         sum_row_idx_q = current_row
         for cell in ws[current_row]:
@@ -1755,38 +2044,122 @@ def build_quarterly_report(
             cell.border = border
         sum_total_cell_q = ws.cell(row=sum_row_idx_q, column=6)
         sum_total_cell_q.number_format = "0.00"
-        if quarter_data_start_row <= quarter_data_end_row:
-            sum_total_cell_q.value = f"=SUM(F{quarter_data_start_row}:F{quarter_data_end_row})"
+        if monthly_sum_total_cells:
+            sum_total_cell_q.value = f"=SUM({','.join(monthly_sum_total_cells)})"
         else:
             sum_total_cell_q.value = 0
+
+        # Add sum formulas for Umsatz (M), Möglicher Umsatz (N), Entgangener Umsatz (O), and Umsatz kumuliert (P) in quarterly summary
+        sum_umsatz_cell_q = ws.cell(row=sum_row_idx_q, column=13)  # Column M
+        sum_umsatz_cell_q.number_format = '#,##0.00'
+        if quarter_data_start_row <= quarter_data_end_row:
+            sum_umsatz_cell_q.value = f"=SUM(M{quarter_data_start_row}:M{quarter_data_end_row})"
+        else:
+            sum_umsatz_cell_q.value = 0
+
+        sum_possible_umsatz_cell_q = ws.cell(row=sum_row_idx_q, column=14)  # Column N
+        sum_possible_umsatz_cell_q.number_format = '#,##0.00'
+        if quarter_data_start_row <= quarter_data_end_row:
+            sum_possible_umsatz_cell_q.value = f"=SUM(N{quarter_data_start_row}:N{quarter_data_end_row})"
+        else:
+            sum_possible_umsatz_cell_q.value = 0
+
+        sum_lost_umsatz_cell_q = ws.cell(row=sum_row_idx_q, column=15)  # Column O
+        sum_lost_umsatz_cell_q.number_format = '#,##0.00'
+        if quarter_data_start_row <= quarter_data_end_row:
+            sum_lost_umsatz_cell_q.value = f"=SUM(O{quarter_data_start_row}:O{quarter_data_end_row})"
+        else:
+            sum_lost_umsatz_cell_q.value = 0
+
+        sum_umsatz_kum_cell_q = ws.cell(row=sum_row_idx_q, column=16)  # Column P
+        sum_umsatz_kum_cell_q.number_format = '#,##0.00'
+        if quarter_data_start_row <= quarter_data_end_row:
+            sum_umsatz_kum_cell_q.value = f"=SUM(P{quarter_data_start_row}:P{quarter_data_end_row})"
+        else:
+            sum_umsatz_kum_cell_q.value = 0
+
         current_row += 1
 
-        # Bonusberechtigte Stunden row
-        ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        # Bonusberechtigte Stunden row - split into Base (G) + Adjustment (H) = Total (F)
+        ws.append(["", "Bonusberechtigte Stunden", "", "", "", 0, 0, 0, "", "", "", "", "", "", "", ""])
         bonus_row_idx_q = current_row
         for cell in ws[current_row]:
             cell.font = Font(bold=True)
             cell.border = border
+
+        # Column G (Basis) - Sum of monthly bonus BASE values (G cells from monthly summaries)
+        bonus_base_cell_q = ws.cell(row=bonus_row_idx_q, column=7)
+        bonus_base_cell_q.number_format = "0.00"
+        if monthly_bonus_base_cells:
+            bonus_base_cell_q.value = f"=SUM({','.join(monthly_bonus_base_cells)})"
+        else:
+            bonus_base_cell_q.value = 0
+
+        # Column H (Anpassung) - Should be 0 because monthly adjustments are already in the monthly F totals
+        # The quarterly detail H cells show the monthly adjustments for reference, but we don't sum them again here
+        # User can manually enter additional quarterly-level adjustments here if needed
+        bonus_adj_cell_q = ws.cell(row=bonus_row_idx_q, column=8)
+        bonus_adj_cell_q.number_format = "0.00"
+        bonus_adj_cell_q.value = 0  # No automatic summation to avoid double-counting
+
+        # Column F (Total) - Base + Adjustments
         bonus_total_cell_q = ws.cell(row=bonus_row_idx_q, column=6)
         bonus_total_cell_q.number_format = "0.00"
-        if adjustment_cells_regular_q:
-            bonus_total_cell_q.value = f"=F{sum_row_idx_q}+SUM({','.join(adjustment_cells_regular_q)})"
-        else:
-            bonus_total_cell_q.value = f"=F{sum_row_idx_q}"
+        bonus_total_cell_q.value = f"={bonus_base_cell_q.coordinate}+{bonus_adj_cell_q.coordinate}"
         current_row += 1
 
-        # Bonusberechtigte Stunden Sonderprojekt row
-        ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        # Bonusberechtigte Stunden Sonderprojekt row - split into Base (G) + Adjustment (H) = Total (F)
+        ws.append(["", "Bonusberechtigte Stunden Sonderprojekt", "", "", "", 0, 0, 0, "", "", "", "", "", "", "", ""])
         special_row_idx_q = current_row
         for cell in ws[current_row]:
             cell.font = Font(bold=True)
             cell.border = border
+
+        # Column G (Basis) - Sum of monthly special bonus BASE values (G cells from monthly summaries)
+        special_base_cell_q = ws.cell(row=special_row_idx_q, column=7)
+        special_base_cell_q.number_format = "0.00"
+        if monthly_special_base_cells:
+            special_base_cell_q.value = f"=SUM({','.join(monthly_special_base_cells)})"
+        else:
+            special_base_cell_q.value = 0
+
+        # Column H (Anpassung) - Should be 0 because monthly adjustments are already in the monthly F totals
+        # The quarterly detail H cells show the monthly adjustments for reference, but we don't sum them again here
+        # User can manually enter additional quarterly-level adjustments here if needed
+        special_adj_cell_q = ws.cell(row=special_row_idx_q, column=8)
+        special_adj_cell_q.number_format = "0.00"
+        special_adj_cell_q.value = 0  # No automatic summation to avoid double-counting
+
+        # Column F (Total) - Base + Adjustments
         special_total_cell_q = ws.cell(row=special_row_idx_q, column=6)
         special_total_cell_q.number_format = "0.00"
-        if adjustment_cells_special_q:
-            special_total_cell_q.value = f"=SUM({','.join(adjustment_cells_special_q)})"
+        special_total_cell_q.value = f"={special_base_cell_q.coordinate}+{special_adj_cell_q.coordinate}"
+        current_row += 1
+
+        # Zugeordnete Stunden von anderen MA (Quartal) - Sum of monthly "Zugeordnete Stunden von anderen MA" rows
+        ws.append(["", "Zugeordnete Stunden von anderen MA", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        assigned_row_idx_q = current_row
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+        assigned_total_cell_q = ws.cell(row=assigned_row_idx_q, column=6)
+        assigned_total_cell_q.number_format = "0.00"
+        if monthly_assigned_from_others_cells:
+            assigned_total_cell_q.value = f"=SUM({','.join(monthly_assigned_from_others_cells)})"
         else:
-            special_total_cell_q.value = 0
+            assigned_total_cell_q.value = 0
+        current_row += 1
+
+        # Gesamt Bonus Stunden (Quartal) = Bonusberechtigte + Sonderprojekt + Zugeordnete
+        ws.append(["", "Gesamt Bonus Stunden", "", "", "", 0, "", "", "", "", "", "", "", "", "", ""])
+        total_bonus_row_idx_q = current_row
+        for cell in ws[current_row]:
+            cell.font = Font(bold=True)
+            cell.border = border
+            cell.fill = PatternFill(start_color='D9EAD3', end_color='D9EAD3', fill_type='solid')
+        total_bonus_cell_q = ws.cell(row=total_bonus_row_idx_q, column=6)
+        total_bonus_cell_q.number_format = "0.00"
+        total_bonus_cell_q.value = f"={bonus_total_cell_q.coordinate}+{special_total_cell_q.coordinate}+{assigned_total_cell_q.coordinate}"
         current_row += 1
 
         # ========== END QUARTERLY SUMMARY TABLE ==========
@@ -1843,9 +2216,14 @@ def build_quarterly_report(
         ws.column_dimensions['K'].width = 15  # Von anderen
         ws.column_dimensions['L'].width = 18  # Stundensatz (€/h)
         ws.column_dimensions['M'].width = 15  # Umsatz (€)
-        ws.column_dimensions['N'].width = 18  # Budget Gesamt (€)
-        ws.column_dimensions['O'].width = 15  # Kosten (€)
+        ws.column_dimensions['N'].width = 18  # Möglicher Umsatz (€)
+        ws.column_dimensions['O'].width = 18  # Entgangener Umsatz (€)
         ws.column_dimensions['P'].width = 22  # Umsatz kumuliert (€)
+        ws.column_dimensions['Q'].width = 22  # Soll Obermeilenstein (h)
+        ws.column_dimensions['R'].width = 18  # Budget Gesamt (€)
+        ws.column_dimensions['S'].width = 15  # Kosten (€)
+        ws.column_dimensions['T'].width = 12  # Rechnung
+        ws.column_dimensions['U'].width = 30  # Kommentar
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
@@ -1899,9 +2277,31 @@ def build_quarterly_report(
             else:
                 assigned_cell.value = 0
 
-        # Fill quarterly "Von anderen" and "Umsatz kumuliert" formulas
+        # Fill quarterly "Quartal (h)", "Von anderen" and "Umsatz kumuliert" formulas
         for track_key_q, row_num in quarter_row_assignments_all[emp].items():
             proj_norm, ms_norm = track_key_q
+
+            # Quartal (h) (column F) - Sum of (F + I + K) from monthly tables
+            # This ensures the quarterly total reflects manual adjustments and assignments
+            quarter_hours_cell = ws.cell(row=row_num, column=6)
+            quarter_hours_cell.number_format = "0.00"
+            monthly_f_refs = []
+            monthly_i_refs = []
+            monthly_k_refs = []
+            for month in months:
+                monthly_key = (proj_norm, ms_norm, month)
+                if monthly_key in row_assignments[emp]:
+                    monthly_row = row_assignments[emp][monthly_key]
+                    monthly_f_refs.append(f"F{monthly_row}")
+                    monthly_i_refs.append(f"I{monthly_row}")
+                    monthly_k_refs.append(f"K{monthly_row}")
+
+            if monthly_f_refs:
+                # Sum all monthly F+I+K values
+                all_refs = monthly_f_refs + monthly_i_refs + monthly_k_refs
+                quarter_hours_cell.value = f"=SUM({','.join(all_refs)})"
+            else:
+                quarter_hours_cell.value = 0
 
             # Von anderen (column K) - Sum hours from ALL monthly tables for this employee
             # across all months where this project/milestone appears
@@ -1933,11 +2333,22 @@ def build_quarterly_report(
 
     # Create summary cover sheet
     progress_cb(96, "Erstelle Deckblatt")
-    _create_cover_sheet(wb, target_quarter, months, employee_summary_data, border)
+    _create_cover_sheet(
+        wb, target_quarter, months, employee_summary_data, border, report_title=report_title
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
-    return out_path
+
+    # Add VBA macro if requested and convert to .xlsm
+    if add_vba:
+        progress_cb(98, "Füge VBA-Makro hinzu")
+        final_path = _add_vba_macro(out_path, progress_cb)
+    else:
+        final_path = out_path
+        progress_cb(98, "Überspringe VBA-Makro")
+
+    return final_path
 
 
 def generate_quarterly_report(

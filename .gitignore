@@ -1,16 +1,57 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
+*$py.class
+
+# IDEs
+.vscode/
+.idea/
 *.swp
 *.swo
+
+# Environment
 .env
+.env.local
 venv/
 .venv/
 py-embed/
 vendor/
+
+# User data
 export_Fred_Larry/
-data/
+data/jobs/*
+!data/jobs/.gitkeep
+
+# Reports
 report_*.xlsx
+BSP/*_fixed.xlsm
+BSP/*_vorlauf.xlsm
+BSP/Test_*.xlsm
+BSP/~$*.xlsx
+BSP/~$*.xlsm
+
+# Test/Debug files
+test_*.py
+check_*.py
+validate_*.py
+analyze_*.py
+excel_check_output.txt
+
+# Windows-specific scripts (Docker deployment only)
+run_portable.ps1
+run_portable.cmd
+*.ps1
+*.cmd
+*.bat
+
+# OS
 *.lnk
 IMG_*.jpg
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

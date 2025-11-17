@@ -15,9 +15,9 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .report_generator import generate_quarterly_report
+from .api import reports_router
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,11 +27,6 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 CLEANUP_RETENTION_DAYS = 7
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # einmal täglich prüfen
-
-BASIC_AUTH_USER = os.getenv("BASIC_AUTH_USERNAME")
-BASIC_AUTH_PASS = os.getenv("BASIC_AUTH_PASSWORD")
-AUTH_ENABLED = bool(BASIC_AUTH_USER and BASIC_AUTH_PASS)
-security = HTTPBasic()
 
 
 @dataclass
@@ -61,6 +56,9 @@ class Job:
 
 
 app = FastAPI(title="Quartalsreport Generator")
+
+# Include API routers
+app.include_router(reports_router)
 
 # Ensure UTF-8 encoding for all responses
 @app.middleware("http")
@@ -99,22 +97,6 @@ def _job_progress_updater(job: Job):
         job.message = message
     return _update
 
-
-def require_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    if not AUTH_ENABLED:
-        return ""
-    correct_username = secrets.compare_digest(credentials.username, BASIC_AUTH_USER)
-    correct_password = secrets.compare_digest(credentials.password, BASIC_AUTH_PASS)
-    if not (correct_username and correct_password):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-
-
-ROUTE_DEPENDENCIES = [Depends(require_basic_auth)] if AUTH_ENABLED else []
 
 
 async def worker() -> None:
@@ -212,12 +194,12 @@ def _queue_position(job_id: str) -> Optional[int]:
         return None
 
 
-@app.get("/", response_class=HTMLResponse, dependencies=ROUTE_DEPENDENCIES)
+@app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.post("/api/jobs", response_class=JSONResponse, dependencies=ROUTE_DEPENDENCIES)
+@app.post("/api/jobs", response_class=JSONResponse)
 async def create_job(
     csv_file: UploadFile = File(...),
     xml_file: UploadFile = File(...),
@@ -259,7 +241,7 @@ async def create_job(
     })
 
 
-@app.get("/api/jobs/{job_id}", response_class=JSONResponse, dependencies=ROUTE_DEPENDENCIES)
+@app.get("/api/jobs/{job_id}", response_class=JSONResponse)
 async def job_status(job_id: str):
     job = job_store.get(job_id)
     if not job:
@@ -269,7 +251,7 @@ async def job_status(job_id: str):
     return JSONResponse(job.to_dict(position))
 
 
-@app.get("/api/jobs/{job_id}/download", dependencies=ROUTE_DEPENDENCIES)
+@app.get("/api/jobs/{job_id}/download")
 async def job_download(job_id: str):
     job = job_store.get(job_id)
     if not job:
@@ -281,7 +263,7 @@ async def job_download(job_id: str):
     return FileResponse(path=job.result_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-@app.delete("/api/jobs/{job_id}", dependencies=ROUTE_DEPENDENCIES)
+@app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
     job = job_store.get(job_id)
     if not job:
