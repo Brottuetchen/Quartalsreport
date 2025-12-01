@@ -797,6 +797,8 @@ def build_quarterly_report(
         ws[f"A{current_row}"].font = Font(bold=True, size=12)
         current_row += 1
         ws.append(["Gesamt eingetragene Stunden:", round(total_hours_all_months, 2)])
+        total_hours_cell = ws.cell(row=current_row, column=2)
+        total_hours_cell.number_format = "0.00"
         for cell in ws[current_row]:
             cell.font = Font(bold=True)
         current_row += 1
@@ -826,7 +828,7 @@ def build_quarterly_report(
         current_row += 1
 
         # Store quarterly summary cell references
-        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 2}"
+        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!{total_hours_cell.coordinate}"
         employee_summary_data[emp]['quarter_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_bonus_cell.coordinate}"
         employee_summary_data[emp]['quarter_special_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_special_cell.coordinate}"
 
