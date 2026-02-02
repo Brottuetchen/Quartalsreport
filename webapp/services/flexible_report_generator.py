@@ -109,18 +109,14 @@ class FlexibleReportGenerator:
 
     def _filter_by_date_range(self, df_xml: pd.DataFrame) -> pd.DataFrame:
         """Filter XML data to specified date range."""
-        # Ensure date column exists
-        if 'date' not in df_xml.columns:
-            raise ValueError("XML data must have a 'date' column")
-
-        # Convert to datetime if needed
-        if not pd.api.types.is_datetime64_any_dtype(df_xml['date']):
-            df_xml['date'] = pd.to_datetime(df_xml['date'])
+        # Use date_parsed column which is already datetime from load_xml_times
+        if 'date_parsed' not in df_xml.columns:
+            raise ValueError("XML data must have a 'date_parsed' column")
 
         # Filter by date range
         mask = (
-            (df_xml['date'].dt.date >= self.config.start_date) &
-            (df_xml['date'].dt.date <= self.config.end_date)
+            (df_xml['date_parsed'].dt.date >= self.config.start_date) &
+            (df_xml['date_parsed'].dt.date <= self.config.end_date)
         )
 
         return df_xml[mask].copy()
@@ -178,12 +174,9 @@ class FlexibleReportGenerator:
         """Group data by calendar months."""
         blocks = []
 
-        # Ensure date column is datetime
-        if not pd.api.types.is_datetime64_any_dtype(df_xml['date']):
-            df_xml['date'] = pd.to_datetime(df_xml['date'])
-
+        # Use date_parsed which is already datetime from load_xml_times
         # Get unique months in the data
-        df_xml['month_period'] = df_xml['date'].dt.to_period('M')
+        df_xml['month_period'] = df_xml['date_parsed'].dt.to_period('M')
         months = sorted(df_xml['month_period'].unique())
 
         for month in months:
@@ -223,13 +216,10 @@ class FlexibleReportGenerator:
         """Group data by calendar weeks."""
         blocks = []
 
-        # Ensure date column is datetime
-        if not pd.api.types.is_datetime64_any_dtype(df_xml['date']):
-            df_xml['date'] = pd.to_datetime(df_xml['date'])
-
+        # Use date_parsed which is already datetime from load_xml_times
         # Get unique weeks
-        df_xml['week'] = df_xml['date'].dt.isocalendar().week
-        df_xml['year'] = df_xml['date'].dt.year
+        df_xml['week'] = df_xml['date_parsed'].dt.isocalendar().week
+        df_xml['year'] = df_xml['date_parsed'].dt.year
 
         weeks = df_xml.groupby(['year', 'week']).groups
 
@@ -237,8 +227,8 @@ class FlexibleReportGenerator:
             week_data = df_xml.loc[indices].copy()
 
             # Get start and end of week
-            start = week_data['date'].min().date()
-            end = week_data['date'].max().date()
+            start = week_data['date_parsed'].min().date()
+            end = week_data['date_parsed'].max().date()
 
             name = f"KW {week} ({start.strftime('%d.%m')} - {end.strftime('%d.%m.%Y')})"
 

@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
 JOBS_DIR = DATA_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_CSV_PATH = Path(os.getenv("DEFAULT_CSV_PATH", str(DATA_DIR / "default_budget.csv")))
 
 CLEANUP_RETENTION_DAYS = 7
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # einmal täglich prüfen
@@ -37,6 +38,7 @@ class Job:
     xml_path: Path
     output_dir: Path
     requested_quarter: Optional[str]
+    output_prefix: Optional[str] = None
     status: str = "queued"  # queued | processing | finished | failed
     progress: int = 0
     message: str = "In Warteschlange"
@@ -51,6 +53,7 @@ class Job:
             "message": self.message,
             "queue_position": queue_position,
             "download_available": self.status == "finished" and self.result_path is not None,
+            "result_filename": self.result_path.name if self.result_path else None,
             "error": self.error,
         }
 
@@ -117,6 +120,7 @@ async def worker() -> None:
                 csv_path=job.csv_path,
                 xml_path=job.xml_path,
                 output_dir=job.output_dir,
+                output_name_prefix=job.output_prefix,
                 requested_quarter=job.requested_quarter,
                 progress_cb=_job_progress_updater(job),
             )
@@ -201,21 +205,30 @@ async def index(request: Request):
 
 @app.post("/api/jobs", response_class=JSONResponse)
 async def create_job(
-    csv_file: UploadFile = File(...),
+    csv_file: Optional[UploadFile] = File(default=None),
     xml_file: UploadFile = File(...),
     quarter: Optional[str] = Form(default=None),
 ):
-    if csv_file.content_type not in {"text/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"}:
+    if csv_file and csv_file.content_type not in {"text/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"}:
         raise HTTPException(status_code=400, detail="CSV-Datei wird erwartet")
-    if not xml_file.filename.lower().endswith(".xml"):
+    if not xml_file.filename or not xml_file.filename.lower().endswith(".xml"):
         raise HTTPException(status_code=400, detail="XML-Datei wird erwartet")
+    if csv_file is None and not DEFAULT_CSV_PATH.exists():
+        raise HTTPException(status_code=400, detail="Keine Standard-CSV hinterlegt. Bitte CSV-Datei hochladen.")
 
     job_id = uuid.uuid4().hex
     job_dir = JOBS_DIR / job_id
-    csv_path = job_dir / (csv_file.filename or "source.csv")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = job_dir / DEFAULT_CSV_PATH.name
     xml_path = job_dir / (xml_file.filename or "source.xml")
 
-    await _save_upload(csv_file, csv_path)
+    if csv_file:
+        csv_path = job_dir / (csv_file.filename or "source.csv")
+        await _save_upload(csv_file, csv_path)
+        DEFAULT_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(csv_path, DEFAULT_CSV_PATH)
+    else:
+        shutil.copy2(DEFAULT_CSV_PATH, csv_path)
     await _save_upload(xml_file, xml_path)
 
     job = Job(
@@ -225,6 +238,7 @@ async def create_job(
         xml_path=xml_path,
         output_dir=job_dir,
         requested_quarter=quarter if quarter else None,
+        output_prefix=xml_path.stem or None,
     )
 
     async with queue_lock:

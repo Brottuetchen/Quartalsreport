@@ -23,7 +23,9 @@ from ..models import ReportConfig, ReportType, TimeBlock
 from ..report_generator import (
     MONTHLY_BUDGETS,
     _create_project_budget_sheet,
+    _add_vba_macro,
     de_to_float,
+    detect_billing_type,
     is_bonus_project,
     norm_ms,
     status_color_hex,
@@ -40,6 +42,7 @@ def build_flexible_report(
     time_blocks: List[TimeBlock],
     out_path: Path,
     progress_cb: ProgressCallback = _noop_progress,
+    add_vba: bool = True,
 ) -> Path:
     """
     Builds a flexible Excel report based on custom time blocks and filters.
@@ -106,10 +109,19 @@ def build_flexible_report(
             ws[f"A{current_row}"].font = Font(bold=True, size=12)
             current_row += 1
 
-            header = ["Projekt", "Meilenstein", "Soll (h)", "Ist (h)", "Stunden in Block (h)", "%"]
-            if config.include_bonus_calc:
-                header.append("Bonus-Anpassung (h)")
-            header.extend(["Rechnung", "Kommentar"])
+            # Header mit Bonus-Anpassung (intern) und Abrechnungsart
+            header = [
+                "Projekt",              # A (1)
+                "Meilenstein",          # B (2)
+                "Soll (h)",             # C (3)
+                "Ist (h)",              # D (4)
+                "Stunden in Block (h)", # E (5)
+                "%",                    # F (6)
+                "Bonus-Anpassung (h)",  # G (7) - nur intern, nicht für Export
+                "Abrechnungsart",       # H (8) - neu, wird exportiert
+                "Rechnung",             # I (9) - wird exportiert
+                "Kommentar",            # J (10) - wird exportiert
+            ]
             ws.append(header)
 
             for cell in ws[current_row]:
@@ -125,39 +137,46 @@ def build_flexible_report(
                 soll_val = row_data.get("Soll", 0.0) or 0.0
                 ist_val = row_data.get("Ist", 0.0) or 0.0
                 hours_val = row_data.get("hours", 0.0) or 0.0
-                
-                row_to_append = [
-                    row_data["Projekte"], row_data["Meilenstein"],
-                    round(soll_val, 2) if soll_val > 0 else "-",
-                    round(ist_val, 2) if ist_val > 0 else "-",
-                    round(hours_val, 2),
-                ]
 
                 prozent = (ist_val / soll_val * 100.0) if soll_val > 0 else 0.0
-                row_to_append.append(round(prozent, 2) if soll_val > 0 else "-")
 
-                if config.include_bonus_calc:
-                    row_to_append.append("")
+                # Abrechnungsart ermitteln
+                arbeitspaket = row_data.get("Arbeitspaket", "")
+                honorarbereich = row_data.get("Honorarbereich", "")
+                billing_type = detect_billing_type(arbeitspaket, honorarbereich)
 
-                row_to_append.extend(["", ""])
+                # Erstelle Zeile mit allen Spalten
+                row_to_append = [
+                    row_data["Projekte"],    # A (1)
+                    row_data["Meilenstein"], # B (2)
+                    round(soll_val, 2) if soll_val > 0 else "-",  # C (3)
+                    round(ist_val, 2) if ist_val > 0 else "-",    # D (4)
+                    round(hours_val, 2),     # E (5)
+                    round(prozent, 2) if soll_val > 0 else "-",   # F (6)
+                    "",                      # G (7) Bonus-Anpassung (editierbar, nur intern)
+                    billing_type,            # H (8) Abrechnungsart (wird exportiert)
+                    "",                      # I (9) Rechnung (Dropdown, wird exportiert)
+                    "",                      # J (10) Kommentar (wird exportiert)
+                ]
                 ws.append(row_to_append)
                 
-                if config.include_bonus_calc:
-                    is_special = is_bonus_project(row_data.get("Projekte", ""))
-                    bonus_candidate = prozent <= 100.0
-                    
-                    adj_cell = ws.cell(row=current_row, column=7)
-                    adj_cell.number_format = "0.00"
-                    adjustment_cells.append(adj_cell.coordinate)
-                    
-                    if bonus_candidate:
-                        if is_special:
-                            bonus_hours_special_block += hours_val
-                        else:
-                            bonus_hours_block += hours_val
+                # Bonus-Berechnung
+                is_special = is_bonus_project(row_data.get("Projekte", ""))
+                bonus_candidate = prozent <= 100.0
 
-                rechnung_col_idx = 8 if config.include_bonus_calc else 7
-                rechnung_cell = ws.cell(row=current_row, column=rechnung_col_idx)
+                # Spalte G (7) = Bonus-Anpassung (editierbar, nur intern)
+                adj_cell = ws.cell(row=current_row, column=7)
+                adj_cell.number_format = "0.00"
+                adjustment_cells.append(adj_cell.coordinate)
+
+                if bonus_candidate:
+                    if is_special:
+                        bonus_hours_special_block += hours_val
+                    else:
+                        bonus_hours_block += hours_val
+
+                # Spalte I (9) = Rechnung Dropdown
+                rechnung_cell = ws.cell(row=current_row, column=9)
                 rechnung_dv = DataValidation(type="list", formula1='"SR,AZ"', allow_blank=True)
                 rechnung_dv.add(rechnung_cell)
                 ws.add_data_validation(rechnung_dv)
@@ -203,18 +222,17 @@ def build_flexible_report(
             ws.append([])
             current_row += 1
 
-        ws.column_dimensions['A'].width = 40
-        ws.column_dimensions['B'].width = 50
-        ws.column_dimensions['C'].width = 15
-        ws.column_dimensions['D'].width = 15
-        ws.column_dimensions['E'].width = 20
-        ws.column_dimensions['F'].width = 10
-        col_idx = 7
-        if config.include_bonus_calc:
-            ws.column_dimensions['G'].width = 20
-            col_idx += 1
-        ws.column_dimensions[get_column_letter(col_idx)].width = 15
-        ws.column_dimensions[get_column_letter(col_idx + 1)].width = 30
+        # Spaltenbreiten optimiert (nicht zu breit)
+        ws.column_dimensions['A'].width = 35  # Projekt
+        ws.column_dimensions['B'].width = 45  # Meilenstein
+        ws.column_dimensions['C'].width = 10  # Soll
+        ws.column_dimensions['D'].width = 10  # Ist
+        ws.column_dimensions['E'].width = 15  # Stunden in Block
+        ws.column_dimensions['F'].width = 8   # %
+        ws.column_dimensions['G'].width = 15  # Bonus-Anpassung (nur intern)
+        ws.column_dimensions['H'].width = 15  # Abrechnungsart
+        ws.column_dimensions['I'].width = 12  # Rechnung
+        ws.column_dimensions['J'].width = 25  # Kommentar
 
         progress = int((idx_emp / total_emps) * 80) + 20
         progress_cb(min(progress, 95), f"Verarbeite Mitarbeiter {emp}")
@@ -224,8 +242,16 @@ def build_flexible_report(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
+
+    # Add VBA macro if requested and convert to .xlsm
+    if add_vba:
+        progress_cb(98, "Füge VBA-Makro hinzu")
+        final_path = _add_vba_macro(out_path, progress_cb)
+    else:
+        final_path = out_path
+
     progress_cb(100, "Flexibler Report fertiggestellt")
-    return out_path
+    return final_path
 
 
 def _create_flexible_summary_sheet(

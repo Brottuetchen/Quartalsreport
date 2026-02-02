@@ -102,7 +102,7 @@ WÃ¤hrend der Verarbeitung sehen Sie:
 Nach erfolgreicher Verarbeitung:
 1. Der Button **Ergebnis herunterladen** erscheint
 2. Klicken Sie darauf, um die Excel-Datei herunterzuladen
-3. Die Datei heiÃŸt z.B. `Q3-2025.xlsx`
+3. Die Datei heiÃŸt z.B. `Q3-2025.xlsm`
 
 #### 5. Neuen Report starten
 
@@ -328,7 +328,7 @@ Nur wenn **Soll = 0** und **Ist = 0**, greift das Tool auf die fest definierten 
 
 ### Struktur der Excel-Datei
 
-Die generierte Excel-Datei (z.B. `Q3-2025.xlsx`) enthÃ¤lt:
+Die generierte Excel-Datei (z.B. `Q3-2025.xlsm`) enthÃ¤lt:
 
 1. **Ãœbersichtsblatt** (Deckblatt)
 2. **Pro Mitarbeiter ein separates Arbeitsblatt**

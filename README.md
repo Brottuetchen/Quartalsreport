@@ -25,7 +25,7 @@ Webdienst auf Basis von FastAPI zur Erstellung quartalsweiser Bonusberichte aus 
 
 - CSV (Soll/Ist) und XML (Zeiterfassung) per Weboberfläche oder REST hochladen.
 - Automatische Quartalsauswahl oder explizite Vorgabe (z. B. `Q3-2025`).
-- Erstellung einer `.xlsx`-Mappe mit Monatsübersichten, Bonus-Anpassungsfeldern und separater Sonderprojekt-Summe.
+- Erstellung einer `.xlsm`-Mappe mit Monatsübersichten, Bonus-Anpassungsfeldern und separater Sonderprojekt-Summe.
 - **Deckblatt mit Gesamtübersicht**: Automatisch generiertes Übersichtsblatt mit dynamischen Summen aller Mitarbeiter.
 - Generierte Werte per Übertragshilfe einfach in die Firmenvorlage kopieren.
 - Bereitstellung per Docker-Container, optional mit HTTP Basic Auth.
@@ -142,7 +142,7 @@ Für jeden Mitarbeiter des gewählten Quartals:
 4. **Quartalsübersicht** für Meilensteine mit Quartalssoll.
 5. **Übertragshilfe**: Tabelle `Monat`, `Mitarbeiter`, `Prod. Stunden`, `Bonusberechtigte Stunden`, `Bonusberechtigte Stunden Sonderprojekt`.
 
-Dateien liegen nach Fertigstellung unter `data/jobs/<job-id>/Q{Quartal}-{Jahr}.xlsx`.
+Dateien liegen nach Fertigstellung unter `data/jobs/<job-id>/Q{Quartal}-{Jahr}.xlsm`.
 
 ---
 

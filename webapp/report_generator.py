@@ -19,7 +19,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -175,6 +175,19 @@ def load_csv_budget_data(csv_path: Path) -> Tuple[pd.DataFrame, Dict[Tuple[str, 
         raise RuntimeError("CSV konnte nicht gelesen werden.")
 
     df.columns = [c.strip().replace("\u200b", "").replace("\ufeff", "") for c in df.columns]
+
+    # Check for 'Projekte' column or alternatives
+    if "Projekte" not in df.columns:
+        # Try to find alternative names
+        found = False
+        for alt in ["Projekt", "Project", "Projects", "Projektname"]:
+            if alt in df.columns:
+                df.rename(columns={alt: "Projekte"}, inplace=True)
+                found = True
+                break
+        if not found:
+            raise ValueError(f"Spalte 'Projekte' nicht gefunden. Verfügbare Spalten: {list(df.columns)}")
+
     df["Projekte"] = df["Projekte"].ffill()
 
     def _project_keys(name: str) -> List[str]:
@@ -386,6 +399,19 @@ def load_csv_projects(csv_path: Path) -> pd.DataFrame:
         raise RuntimeError("CSV konnte nicht gelesen werden.")
 
     df.columns = [c.strip().replace("\u200b", "").replace("\ufeff", "") for c in df.columns]
+
+    # Check for 'Projekte' column or alternatives
+    if "Projekte" not in df.columns:
+        # Try to find alternative names
+        found = False
+        for alt in ["Projekt", "Project", "Projects", "Projektname"]:
+            if alt in df.columns:
+                df.rename(columns={alt: "Projekte"}, inplace=True)
+                found = True
+                break
+        if not found:
+            raise ValueError(f"Spalte 'Projekte' nicht gefunden. Verfügbare Spalten: {list(df.columns)}")
+
     df["Projekte"] = df["Projekte"].ffill()
 
     mask_ms = df["Arbeitspaket"].notna() & (df["Arbeitspaket"].astype(str).str.strip() != "-")
@@ -435,10 +461,12 @@ def load_xml_times(xml_path: Path) -> pd.DataFrame:
             months = {'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06',
                       'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'}
             month = months.get(month_str, '01')
-            return pd.to_datetime(f"{year}-{month}-{day.zfill(2)}", errors='coerce')
-        return pd.NaT
+            month = months.get(month_str, '01')
+            return f"{year}-{month}-{day.zfill(2)}"
+        return None
 
     df["date_parsed"] = df["date"].apply(extract_date)
+    df["date_parsed"] = pd.to_datetime(df["date_parsed"], errors='coerce')
     df["period"] = df["date_parsed"].dt.to_period("M")
     df["quarter"] = df["date_parsed"].dt.to_period("Q")
     df["proj_norm"] = df["project"].astype(str).str.strip()
@@ -517,7 +545,14 @@ def _create_project_budget_sheet(
 ) -> None:
     """Creates a project budget overview sheet with billing type and hourly rates."""
 
-    ws = wb.create_sheet(title="Projekt-Budget-Übersicht", index=0)
+    if "Projekt-Budget-Übersicht" in wb.sheetnames:
+        ws = wb["Projekt-Budget-Übersicht"]
+        # Clear/Reset content
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.value = None
+    else:
+        ws = wb.create_sheet(title="Projekt-Budget-Übersicht", index=0)
 
     # Title
     ws.append(["Projekt-Budget-Übersicht"])
@@ -687,7 +722,21 @@ def _create_cover_sheet(
     """Creates a cover sheet with summary totals across all employees."""
 
     # Create summary sheet
-    ws = wb.create_sheet(title="Übersicht", index=0)
+    # Create summary sheet
+    if "Übersicht" in wb.sheetnames:
+        ws = wb["Übersicht"]
+        # Clear existing content if any (start from scratch but keep button)
+        # Note: clearing cells might be safer than delete_rows if we want to preserve objects
+        # But openpyxl delete_rows is usually fine. Let's start writing at row 1.
+        # Clearing content manually:
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.value = None
+                cell.fill = PatternFill(fill_type=None)
+                cell.border = Border()
+                cell.font = Font()
+    else:
+        ws = wb.create_sheet(title="Übersicht", index=0)
 
     # Title
     title = report_title if report_title else f"Quartalsübersicht {target_quarter}"
@@ -807,85 +856,10 @@ def _create_cover_sheet(
 
 def _add_vba_macro(xlsx_path: Path, progress_cb: ProgressCallback) -> Path:
     """
-    Adds VBA macro to Excel file and converts it to .xlsm format.
-    Uses Windows COM automation to embed the macro.
+    Deprecated: COM automation removed.
+    We now use a template with embedded VBA.
     """
-    try:
-        import win32com.client
-    except ImportError:
-        # If pywin32 is not available, return original path
-        progress_cb(99, "pywin32 nicht verfügbar - überspringe VBA-Einbettung")
-        return xlsx_path
-
-    xlsm_path = xlsx_path.with_suffix('.xlsm')
-    vba_file = Path(__file__).parent / 'export_macro.vba'
-
-    if not vba_file.exists():
-        progress_cb(99, "VBA-Datei nicht gefunden - überspringe Makro-Einbettung")
-        return xlsx_path
-
-    try:
-        # Start Excel application
-        excel = win32com.client.Dispatch("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-
-        # Open the workbook
-        wb = excel.Workbooks.Open(str(xlsx_path.absolute()))
-
-        # Read VBA code
-        with open(vba_file, 'r', encoding='utf-8') as f:
-            vba_code = f.read()
-
-        # Try to access VBProject - this will fail if VBA access is disabled
-        try:
-            vb_project = wb.VBProject
-        except Exception as e:
-            raise Exception(
-                "VBA-Zugriff ist in Excel deaktiviert. "
-                "Bitte aktiviere unter: Datei → Optionen → Trust Center → "
-                "Trust Center-Einstellungen → Makroeinstellungen → "
-                "'Zugriff auf das VBA-Projektobjektmodell vertrauen'"
-            ) from e
-
-        # Add VBA module
-        vb_module = wb.VBProject.VBComponents.Add(1)  # 1 = vbext_ct_StdModule
-        vb_module.CodeModule.AddFromString(vba_code)
-
-        # Add button to cover sheet (named "Übersicht")
-        cover_sheet = wb.Worksheets(1)  # First sheet is the cover sheet
-
-        # Add button at position G4                                 
-        button = cover_sheet.Buttons().Add(
-            Left=cover_sheet.Range("G4").Left,
-            Top=cover_sheet.Range("G4").Top,
-            Width=250,
-            Height=30
-        )
-        button.OnAction = "ExportMitarbeiterSheets"
-        button.Caption = "Mitarbeiter-Sheets exportieren"
-        button.Font.Bold = True
-        button.Font.Size = 11
-
-        # Save as xlsm
-        wb.SaveAs(str(xlsm_path.absolute()), FileFormat=52)  # 52 = xlOpenXMLWorkbookMacroEnabled
-        wb.Close(SaveChanges=False)
-        excel.Quit()
-
-        # Delete original xlsx file
-        xlsx_path.unlink()
-
-        progress_cb(99, "VBA-Makro erfolgreich hinzugefügt")
-        return xlsm_path
-
-    except Exception as e:
-        progress_cb(99, f"Fehler beim Hinzufügen des VBA-Makros: {e}")
-        try:
-            wb.Close(SaveChanges=False)
-            excel.Quit()
-        except:
-            pass
-        return xlsx_path
+    return xlsx_path
 
 
 def build_quarterly_report(
@@ -908,8 +882,26 @@ def build_quarterly_report(
     else:
         df_quarter = df_xml.copy()
 
-    wb = Workbook()
-    wb.remove(wb.active)
+
+
+    # Load template if available
+    template_path = Path(__file__).parent / "template.xlsm"
+    used_template = False
+    
+    if template_path.exists():
+        try:
+            wb = load_workbook(template_path, keep_vba=True)
+            used_template = True
+            progress_cb(2, "Template geladen")
+        except Exception as e:
+            progress_cb(2, f"Fehler beim Laden des Templates: {e}. Erstelle leeres Workbook.")
+            wb = Workbook()
+            wb.remove(wb.active)
+    else:
+        progress_cb(2, "Kein Template gefunden. Erstelle leeres Workbook.")
+        wb = Workbook()
+        wb.remove(wb.active)
+
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
@@ -1326,9 +1318,9 @@ def build_quarterly_report(
                         adjustment_cells_regular.append(adj_cell.coordinate)
                     adj_cell.number_format = "0.00"
 
-                    # Differenz cell (column I) - Formula: F - H (only show if H != 0)
+                    # Differenz cell (column I) - use negative adjustment as transfer amount, never below 0
                     diff_cell = ws.cell(row=current_row, column=9)
-                    diff_cell.value = f"=IF(H{current_row}=0,0,F{current_row}-H{current_row})"
+                    diff_cell.value = f"=IF(H{current_row}<0,MAX(0,MIN(F{current_row},-H{current_row})),0)"
                     diff_cell.number_format = "0.00"
 
                     # Zuordnen an cell (column J) - Dropdown with other employees on same project/milestone IN SAME MONTH
@@ -1888,9 +1880,9 @@ def build_quarterly_report(
                 else:
                     adj_cell.value = 0
 
-                # Differenz cell (column I)
+                # Differenz cell (column I) - use negative adjustment as transfer amount, never below 0
                 diff_cell = ws.cell(row=current_row, column=9)
-                diff_cell.value = f"=IF(H{current_row}=0,0,F{current_row}-H{current_row})"
+                diff_cell.value = f"=IF(H{current_row}<0,MAX(0,MIN(F{current_row},-H{current_row})),0)"
                 diff_cell.number_format = "0.00"
 
                 # Add red conditional formatting
@@ -2199,7 +2191,7 @@ def build_quarterly_report(
         current_row += 1
 
         # Store quarterly summary cell references
-        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 2}"
+        employee_summary_data[emp]['quarter_total_hours_cell'] = f"'{sheet_name}'!B{quarter_bonus_row - 1}"
         employee_summary_data[emp]['quarter_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_bonus_cell.coordinate}"
         employee_summary_data[emp]['quarter_special_bonus_hours_cell'] = f"'{sheet_name}'!{quarter_special_cell.coordinate}"
 
@@ -2337,16 +2329,21 @@ def build_quarterly_report(
         wb, target_quarter, months, employee_summary_data, border, report_title=report_title
     )
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out_path)
+    # Always save macro workbooks with .xlsm when template/VBA is involved
+    save_path = out_path
+    if (used_template or add_vba) and out_path.suffix.lower() != ".xlsm":
+        save_path = out_path.with_suffix(".xlsm")
 
-    # Add VBA macro if requested and convert to .xlsm
-    if add_vba:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(save_path)
+
+    # Add VBA macro if requested (kept for backwards compatibility)
+    final_path = save_path
+    if add_vba and not used_template:
         progress_cb(98, "Füge VBA-Makro hinzu")
-        final_path = _add_vba_macro(out_path, progress_cb)
+        final_path = _add_vba_macro(save_path, progress_cb)
     else:
-        final_path = out_path
-        progress_cb(98, "Überspringe VBA-Makro")
+        progress_cb(98, "Speichere .xlsm (Makro enthalten)" if used_template else "Überspringe VBA-Makro")
 
     return final_path
 
@@ -2355,6 +2352,7 @@ def generate_quarterly_report(
     csv_path: Path,
     xml_path: Path,
     output_dir: Path,
+    output_name_prefix: Optional[str] = None,
     requested_quarter: Optional[str] = None,
     progress_cb: ProgressCallback = _noop_progress,
 ) -> Path:
@@ -2374,7 +2372,12 @@ def generate_quarterly_report(
 
     year = selection.period.year
     quarter_num = selection.period.quarter
-    out_path = output_dir / f"Q{quarter_num}-{year}.xlsx"
+    # Output is now .xlsm because we use the template
+    base_name = f"Q{quarter_num}-{year}.xlsm"
+    prefix = (output_name_prefix or "").strip()
+    if prefix:
+        base_name = f"{prefix}_{base_name}"
+    out_path = output_dir / base_name
 
     result = build_quarterly_report(
         df_csv=df_csv,
@@ -2399,4 +2402,3 @@ __all__ = [
     "MONTHLY_BUDGETS",
     "QUARTERLY_BUDGETS",
 ]
-

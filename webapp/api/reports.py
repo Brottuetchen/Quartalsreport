@@ -116,9 +116,13 @@ async def generate_flexible_report(
         # Generate output filename
         if report_type_enum == ReportType.QUARTERLY:
             quarter_str = f"Q{(start.month - 1) // 3 + 1}-{start.year}"
-            output_filename_base = f"{quarter_str}.xlsx"
+            output_filename_base = f"{quarter_str}.xlsm"
         else:
             output_filename_base = f"Report_{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}.xlsx"
+
+        xml_prefix = Path(xml_file.filename).stem if xml_file.filename else ""
+        if xml_prefix:
+            output_filename_base = f"{xml_prefix}_{output_filename_base}"
 
         output_path = job_dir / output_filename_base
 

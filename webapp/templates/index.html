@@ -26,12 +26,12 @@
       <section id="standard-form" class="card tab-content active">
         <form id="upload-form-standard">
           <div class="field">
-            <label for="csv-file">CSV (Soll/Ist)</label>
-            <input id="csv-file" name="csv_file" type="file" accept=".csv" required />
+            <label for="csv-file">CSV (Soll/Ist, optional bei hinterlegter Standard-CSV)</label>
+            <input id="csv-file" name="csv_file" type="file" accept=".csv" />
           </div>
           <div class="field">
-            <label for="xml-file">XML (Zeiteinträge)</label>
-            <input id="xml-file" name="xml_file" type="file" accept=".xml" required />
+            <label for="xml-file">XML (Zeiteinträge, Mehrfachauswahl möglich)</label>
+            <input id="xml-file" name="xml_file" type="file" accept=".xml" multiple required />
           </div>
           <div class="field">
             <label for="quarter">Quartal (optional, z. B. 2025Q3)</label>
@@ -190,7 +190,9 @@
         </div>
         <div id="error-box" class="error hidden"></div>
         <div id="download-box" class="hidden">
-          <a id="download-link" href="#" download>Ergebnis herunterladen</a>
+          <div id="download-list">
+            <a id="download-link" class="download-link"></a>
+          </div>
           <button id="reset-btn" type="button">Neuen Report starten</button>
         </div>
       </section>

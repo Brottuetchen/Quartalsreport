@@ -1,120 +1,74 @@
 Sub ExportMitarbeiterSheets()
     '=========================================================================
     ' Makro: Export einzelner Mitarbeiter-Sheets
+    ' Trigger: Button auf "Übersicht" (G4)
     ' Funktion: Exportiert jedes Mitarbeiter-Sheet als separate Excel-Datei
-    '           ohne die Spalten H-Q (Bonus-Anpassung bis Umsatz kumuliert)
+    '           Behält Spalten A-H und T-U (Löscht I-S)
+    '           Behält Dropdowns (Spalte T -> wird I)
+    '           Formatiert auf eine Seite (FitToPagesWide = 1)
     '=========================================================================
 
     Dim ws As Worksheet
     Dim newWb As Workbook
-    Dim newWs As Worksheet
-    Dim folderPath As String
-    Dim fileName As String
-    Dim lastRow As Long
-    Dim lastCol As Long
-    Dim sourceRange As Range
-    Dim destCol As Long
-    Dim col As Long
-
-    ' Ordner auswählen
-    With Application.FileDialog(msoFileDialogFolderPicker)
-        .Title = "Wähle Zielordner für Mitarbeiter-Exports"
-        .AllowMultiSelect = False
-        If .Show = -1 Then
-            folderPath = .SelectedItems(1)
-        Else
-            MsgBox "Export abgebrochen.", vbInformation
-            Exit Sub
-        End If
-    End With
-
-    ' Sicherstellen, dass der Pfad mit Backslash endet
-    If Right(folderPath, 1) <> "\" Then
-        folderPath = folderPath & "\"
+    Dim exportPath As String
+    Dim fso As Object
+    
+    ' Pfad für Export definieren (Unterordner "Mitarbeiter_Export" im gleichen Verzeichnis)
+    exportPath = ThisWorkbook.Path & "\Mitarbeiter_Export\"
+    
+    ' Prüfen ob Ordner existiert, sonst erstellen
+    If Dir(exportPath, vbDirectory) = "" Then
+        MkDir exportPath
     End If
 
     ' Bildschirm-Aktualisierung ausschalten für bessere Performance
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
 
-    ' Durch alle Sheets iterieren (außer Deckblatt und Projekt-Budget-Übersicht)
+    ' Durch alle Sheets iterieren
     For Each ws In ThisWorkbook.Worksheets
-        If ws.Name <> "Deckblatt" And ws.Name <> "Projekt-Budget-Übersicht" Then
+        ' Überspringe System-Sheets
+        If ws.Name <> "Deckblatt" And ws.Name <> "Übersicht" And ws.Name <> "Projekt-Budget-Übersicht" Then
 
-            ' Neues Workbook erstellen
-            Set newWb = Workbooks.Add
-            Set newWs = newWb.Worksheets(1)
-            newWs.Name = ws.Name
+            ' Sheet in neue Arbeitsmappe kopieren
+            ws.Copy
+            Set newWb = ActiveWorkbook
+            
+            With newWb.Sheets(1)
+                ' WICHTIG: Zuerst Formeln in Werte umwandeln!
+                ' Wenn wir erst Spalten löschen, gehen Bezüge kaputt (#BEZUG!).
+                ' Deshalb: Erst "einfrieren", dann löschen.
+                .UsedRange.Value = .UsedRange.Value
+            
+                ' Jetzt Spalten I bis S löschen (11 Spalten)
+                ' Damit rücken T und U (Original 20, 21) auf I und J (9, 10).
+                ' Spalten A-H bleiben unberührt.
+                .Range("I:S").Delete Shift:=xlToLeft
+                
+                ' Seitenlayout anpassen (Auf eine Seite breit)
+                With .PageSetup
+                    .Zoom = False
+                    .FitToPagesWide = 1
+                    .FitToPagesTall = False
+                    .Orientation = xlLandscape
+                End With
+                
+                ' Spaltenbreiten anpassen
+                .Columns("I:I").ColumnWidth = 15 ' Ehemals T
+                .Columns("J:J").ColumnWidth = 25 ' Ehemals U
+            End With
 
-            ' Letzte verwendete Zeile und Spalte ermitteln
-            lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
-            lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-
-            ' Spalten kopieren: A-G (1-7) und T-U (20-21)
-            destCol = 1
-
-            ' Kopiere Spalten A-G (1-7)
-            For col = 1 To 7
-                ws.Columns(col).Copy
-                newWs.Columns(destCol).PasteSpecial xlPasteAll
-                newWs.Columns(destCol).PasteSpecial xlPasteColumnWidths
-                destCol = destCol + 1
-            Next col
-
-            ' Kopiere Spalten T-U (20-21)
-            For col = 20 To 21
-                ws.Columns(col).Copy
-                newWs.Columns(destCol).PasteSpecial xlPasteAll
-                newWs.Columns(destCol).PasteSpecial xlPasteColumnWidths
-                destCol = destCol + 1
-            Next col
-
-            ' Formatierung anpassen
-            newWs.Cells.EntireColumn.AutoFit
-
-            ' Data Validations kopieren (Dropdowns)
-            Dim dv As Validation
-            Dim srcCell As Range
-            Dim destCell As Range
-
-            On Error Resume Next
-            ' Kopiere Position-Dropdown (B2)
-            If ws.Range("B2").Validation.Type <> xlValidateInputOnly Then
-                Set srcCell = ws.Range("B2")
-                Set destCell = newWs.Range("B2")
-                srcCell.Copy
-                destCell.PasteSpecial xlPasteValidation
-            End If
-
-            ' Kopiere Rechnung-Dropdowns (Spalte T → Spalte H im neuen Sheet)
-            Dim r As Long
-            For r = 1 To lastRow
-                Set srcCell = ws.Cells(r, 20) ' Spalte T
-                If srcCell.Validation.Type <> xlValidateInputOnly Then
-                    Set destCell = newWs.Cells(r, 8) ' Spalte H im neuen Sheet
-                    srcCell.Copy
-                    destCell.PasteSpecial xlPasteValidation
-                End If
-            Next r
-            On Error GoTo 0
-
-            ' Dateiname erstellen
-            fileName = folderPath & ws.Name & ".xlsx"
-
-            ' Speichern
-            newWb.SaveAs fileName, FileFormat:=xlOpenXMLWorkbook
+            ' Speichern als normale XLSX
+            newWb.SaveAs Filename:=exportPath & ws.Name & ".xlsx", FileFormat:=xlOpenXMLWorkbook
             newWb.Close SaveChanges:=False
 
         End If
     Next ws
 
     ' Aufräumen
-    Application.CutCopyMode = False
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
 
-    MsgBox "Export abgeschlossen!" & vbCrLf & vbCrLf & _
-           "Mitarbeiter-Dateien wurden gespeichert in:" & vbCrLf & _
-           folderPath, vbInformation, "Export erfolgreich"
+    MsgBox "Export abgeschlossen!" & vbCrLf & "Dateien liegen in: " & exportPath, vbInformation, "Export erfolgreich"
 
 End Sub

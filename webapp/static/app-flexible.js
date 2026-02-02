@@ -94,11 +94,12 @@
   const queuePosition = document.getElementById('queue-position');
   const errorBox = document.getElementById('error-box');
   const downloadBox = document.getElementById('download-box');
-  const downloadLink = document.getElementById('download-link');
+  const downloadList = document.getElementById('download-list');
   const resetBtn = document.getElementById('reset-btn');
+  const csvInput = document.getElementById('csv-file');
+  const xmlInput = document.getElementById('xml-file');
+  const quarterInput = document.getElementById('quarter');
 
-  let currentJobId = null;
-  let pollTimer = null;
 
   function showStatusCard() {
     statusCard.classList.remove('hidden');
@@ -112,10 +113,30 @@
     btn.disabled = isLoading;
   }
 
+  function clearDownloads() {
+    if (downloadList) downloadList.innerHTML = '';
+    if (downloadBox) downloadBox.classList.add('hidden');
+  }
+
+  function addDownloadEntry({ label, href, downloadName }) {
+    if (!downloadList) return;
+    const item = document.createElement('a');
+    item.className = 'download-link';
+    item.textContent = label;
+    if (href) {
+      item.href = href;
+      if (downloadName) {
+        item.setAttribute('download', downloadName);
+      }
+    } else {
+      item.href = '#';
+      item.onclick = (e) => e.preventDefault();
+    }
+    downloadList.appendChild(item);
+    if (downloadBox) downloadBox.classList.remove('hidden');
+  }
+
   function resetUI() {
-    clearInterval(pollTimer);
-    pollTimer = null;
-    currentJobId = null;
     if (progressBar) progressBar.style.width = '0%';
     if (statusMessage) statusMessage.textContent = 'Warte auf Start...';
     if (queuePosition) queuePosition.textContent = '-';
@@ -123,37 +144,134 @@
       errorBox.classList.add('hidden');
       errorBox.textContent = '';
     }
-    if (downloadBox) downloadBox.classList.add('hidden');
+    clearDownloads();
     hideStatusCard();
     if (submitBtnStandard) setLoading(submitBtnStandard, false);
     if (submitBtnFlexible) setLoading(submitBtnFlexible, false);
   }
 
+
+  function buildStandardFormData({ csvFile, xmlFile, quarter }) {
+    const formData = new FormData();
+    if (csvFile) {
+      formData.append('csv_file', csvFile);
+    }
+    formData.append('xml_file', xmlFile);
+    if (quarter) {
+      formData.append('quarter', quarter);
+    }
+    return formData;
+  }
+
+  async function submitStandardJob(formData) {
+    const res = await fetch('/api/jobs', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.detail || 'Upload fehlgeschlagen');
+    }
+
+    const data = await res.json();
+    return data.job_id;
+  }
+
+  async function pollJobStatus(jobId, label) {
+    while (true) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) {
+        throw new Error('Status konnte nicht abgefragt werden');
+      }
+      const data = await res.json();
+
+      if (statusMessage) {
+        statusMessage.textContent = label ? `${label} - ${data.message}` : data.message;
+      }
+      if (progressBar) {
+        progressBar.style.width = `${data.progress}%`;
+      }
+
+      if (queuePosition) {
+        if (data.queue_position !== null && data.queue_position > 0) {
+          queuePosition.textContent = data.queue_position;
+        } else {
+          queuePosition.textContent = 'In Bearbeitung';
+        }
+      }
+
+      if (data.status === 'finished' && data.download_available) {
+        return data;
+      }
+
+      if (data.status === 'failed') {
+        throw new Error(data.error || 'Ein Fehler ist aufgetreten');
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
   async function handleStandardFormSubmit(form, btn) {
     setLoading(btn, true);
     showStatusCard();
+    clearDownloads();
 
-    const formData = new FormData(form);
+    if (errorBox) {
+      errorBox.classList.add('hidden');
+      errorBox.textContent = '';
+    }
+    if (progressBar) progressBar.style.width = '0%';
+    if (queuePosition) queuePosition.textContent = '-';
 
     try {
-      const res = await fetch('/api/jobs', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.detail || 'Upload fehlgeschlagen');
+      if (!xmlInput || !xmlInput.files || xmlInput.files.length === 0) {
+        throw new Error('Bitte mindestens eine XML-Datei auswaehlen.');
       }
 
-      const data = await res.json();
-      currentJobId = data.job_id;
+      const xmlFiles = Array.from(xmlInput.files);
+      let csvFile = csvInput && csvInput.files ? csvInput.files[0] : null;
+      const quarterValue = quarterInput ? quarterInput.value.trim() : '';
 
-      // Start polling
-      pollTimer = setInterval(pollStatus, 1000);
+      for (let i = 0; i < xmlFiles.length; i += 1) {
+        const xmlFile = xmlFiles[i];
+        const label = xmlFiles.length > 1
+          ? `${i + 1}/${xmlFiles.length}: ${xmlFile.name}`
+          : xmlFile.name;
+
+        if (progressBar) progressBar.style.width = '0%';
+        if (statusMessage) statusMessage.textContent = `Starte ${label}`;
+        if (queuePosition) queuePosition.textContent = '-';
+
+        const formData = buildStandardFormData({
+          csvFile,
+          xmlFile,
+          quarter: quarterValue,
+        });
+
+        const jobId = await submitStandardJob(formData);
+        const result = await pollJobStatus(jobId, label);
+        const filename = result.result_filename || xmlFile.name;
+        addDownloadEntry({
+          label: `Herunterladen: ${filename}`,
+          href: `/api/jobs/${jobId}/download`,
+          downloadName: filename,
+        });
+
+        if (csvFile) {
+          csvFile = null;
+        }
+      }
+
+      if (statusMessage) statusMessage.textContent = 'Fertig!';
+      if (queuePosition) queuePosition.textContent = '-';
+      setLoading(btn, false);
     } catch (err) {
-      errorBox.textContent = err.message;
-      errorBox.classList.remove('hidden');
+      if (errorBox) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove('hidden');
+      }
       setLoading(btn, false);
     }
   }
@@ -161,7 +279,12 @@
   async function handleFlexibleFormSubmit(form, btn) {
     setLoading(btn, true);
     showStatusCard();
+    clearDownloads();
 
+    if (errorBox) {
+      errorBox.classList.add('hidden');
+      errorBox.textContent = '';
+    }
     if (statusMessage) statusMessage.textContent = 'Bereite flexiblen Report vor...';
     if (progressBar) progressBar.style.width = '10%';
 
@@ -204,14 +327,10 @@
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
-
       // Show success
-      if (downloadBox) {
-        downloadLink.textContent = `✓ ${filename} wurde heruntergeladen`;
-        downloadLink.href = '#';
-        downloadLink.onclick = (e) => e.preventDefault();
-        downloadBox.classList.remove('hidden');
-      }
+      addDownloadEntry({
+        label: `OK: ${filename} wurde heruntergeladen`,
+      });
 
       setLoading(btn, false);
     } catch (err) {
@@ -221,48 +340,6 @@
       }
       if (progressBar) progressBar.style.width = '0%';
       setLoading(btn, false);
-    }
-  }
-
-  async function pollStatus() {
-    if (!currentJobId) return;
-    try {
-      const res = await fetch(`/api/jobs/${currentJobId}`);
-      if (!res.ok) {
-        throw new Error('Status konnte nicht abgefragt werden');
-      }
-      const data = await res.json();
-
-      statusMessage.textContent = data.message;
-      progressBar.style.width = `${data.progress}%`;
-
-      if (data.queue_position !== null && data.queue_position > 0) {
-        queuePosition.textContent = data.queue_position;
-      } else {
-        queuePosition.textContent = 'In Bearbeitung';
-      }
-
-      if (data.status === 'finished' && data.download_available) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        downloadLink.href = `/api/jobs/${currentJobId}/download`;
-        downloadBox.classList.remove('hidden');
-        setLoading(submitBtnStandard, false);
-      }
-
-      if (data.status === 'failed') {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        errorBox.textContent = data.error || 'Ein Fehler ist aufgetreten';
-        errorBox.classList.remove('hidden');
-        setLoading(submitBtnStandard, false);
-      }
-    } catch (err) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-      errorBox.textContent = err.message;
-      errorBox.classList.remove('hidden');
-      setLoading(submitBtnStandard, false);
     }
   }
 
