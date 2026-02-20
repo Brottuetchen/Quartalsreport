@@ -1,112 +1,438 @@
-﻿# Benutzeranleitung: Quartalsreport Generator
+# Benutzeranleitung: Quartalsreport Generator
 
 ## Inhaltsverzeichnis
 
-1. [Ãœbersicht](#Ã¼bersicht)
-2. [BenÃ¶tigte Dateien](#benÃ¶tigte-dateien)
-3. [Verwendung des Tools](#verwendung-des-tools)
-4. [Berechnungslogik](#berechnungslogik)
-5. [Bonus-Anpassungen](#bonus-anpassungen)
-6. [Limits und Budgets](#limits-und-budgets)
+1. [Überblick](#überblick)
+2. [Benötigte Dateien](#benötigte-dateien)
+3. [Standard Quartalsreport](#standard-quartalsreport)
+4. [Flexibler Report](#flexibler-report)
+5. [Admin-Bereich](#admin-bereich)
+6. [Berechnungslogik](#berechnungslogik)
 7. [Ausgabedatei verstehen](#ausgabedatei-verstehen)
-8. [HÃ¤ufige Probleme](#hÃ¤ufige-probleme)
+8. [Häufige Probleme](#häufige-probleme)
 
 ---
 
-## Ãœbersicht
+## Überblick
 
-Der Quartalsreport Generator erstellt automatisiert Excel-Berichte fÃ¼r die quartalsweise Bonusabrechnung. Das Tool vergleicht Soll- und Ist-Stunden aus der Projektverwaltung mit den tatsÃ¤chlich gebuchten Zeiten und berechnet daraus bonusberechtigte Stunden.
+Der **Quartalsreport Generator** erstellt automatisiert Excel-Berichte für die quartalsweise Bonusabrechnung. Das Tool vergleicht Soll- und Ist-Stunden aus der Projektverwaltung mit den tatsächlich gebuchten Zeiten und berechnet daraus bonusberechtigte Stunden.
 
-### Was macht das Tool?
+Das Interface hat drei Bereiche:
 
-- Vergleicht Soll/Ist-Budgets mit gebuchten Stunden
-- Identifiziert bonusberechtigte Zeiten
-- Unterscheidet zwischen regulÃ¤ren und Sonderprojekten
-- Erzeugt ÃœbersichtsblÃ¤tter fÃ¼r alle Mitarbeiter
-- ErmÃ¶glicht manuelle Bonus-Anpassungen
-- Erstellt Ãœbertragshilfen fÃ¼r die Konzernvorlage
+| Tab | Zweck |
+|-----|-------|
+| **Standard Quartalsreport** | Vollständiger Quartalsbericht mit Bonus-Berechnung für alle Mitarbeiter |
+| **Flexibler Report** | Benutzerdefinierte Berichte für beliebige Zeiträume, Mitarbeiter oder Projekte |
+| **Admin** | Zentrale Budget-CSV verwalten, System-Updates einspielen |
 
 ---
 
-## BenÃ¶tigte Dateien
+## Benötigte Dateien
 
-### 1. Zentrale Soll-Ist CSV-Datei
+### 1. Soll-Ist CSV-Datei
 
-**Beschreibung:** Exportdatei aus der Projektverwaltung mit Budget-Informationen Ã¼ber das gesamte Unternehmen.
+Export aus der Projektverwaltung mit Budget-Informationen über alle Projekte.
 
 **Erforderliche Spalten:**
-- `Projekte` â€“ Projektname oder Projektnummer
-- `Arbeitspaket` â€“ Meilenstein-/Arbeitspaketname
-- `Sollstunden Budget` â€“ Geplante Stunden (Format: deutsche Zahlen mit Komma)
-- `Iststunden` â€“ Verbrauchte Stunden laut Budget (Format: deutsche Zahlen mit Komma)
+- `Projekte` – Projektname oder Projektnummer
+- `Honorarbereich` – Markierung der Obermeilensteine (`X`)
+- `Arbeitspaket` – Meilenstein-/Arbeitspaketname
+- `Sollstunden Budget` – Geplante Stunden (deutsches Zahlenformat, z.B. `1.234,56`)
 
-**Format:**
-- Dateiformat: `.csv`
-- Trennzeichen: Tab (`\t`) oder Semikolon (`;`)
-- Kodierung: UTF-16 oder UTF-8
-- Zahlenformat: Deutsch (z.B. `1.234,56`)
+**Dateiformat:**
+- Endung: `.csv`
+- Trennzeichen: Tab
+- Kodierung: UTF-16 (Standard-Export) oder UTF-8
 
-**Hinweis:** Wie diese Datei aus der Projektverwaltung exportiert wird, wird separat behandelt.
+**Hinweis:** Diese Datei kann einmalig zentral vom Administrator hinterlegt werden – dann muss sie beim Standard-Report nicht mehr bei jedem Upload angegeben werden. Beim Flexiblen Report muss sie immer hochgeladen werden.
+
+---
 
 ### 2. Zeiterfassungs-XML-Datei
 
-**Beschreibung:** XML-Export der gebuchten ZeiteintrÃ¤ge fÃ¼r die gewÃ¼nschte Mitarbeitergruppe im betrachteten Quartal.
+XML-Export der gebuchten Zeiteinträge aus dem Zeiterfassungssystem.
 
-**Erforderliche Informationen:**
-- Mitarbeitername
-- Projekt/Projektnummer
-- Meilenstein/Arbeitspaket
-- Gebuchte Stunden
-- Buchungsdatum/-periode
+**Erforderliche Felder in der XML:**
+- `staff_name` – Mitarbeitername
+- `project` – Projektname/-nummer
+- `work_package_name` – Meilenstein/Arbeitspaket
+- `date` – Buchungsdatum
+- `number` – Gebuchte Stunden
 
-**Format:**
-- Dateiformat: `.xml`
-- Muss ZeiteintrÃ¤ge des gewÃ¼nschten Quartals enthalten
+**Dateiformat:**
+- Endung: `.xml`
+- Muss Zeiteinträge des gewünschten Zeitraums enthalten
 
-**Hinweis:** Wie diese Datei aus der Zeiterfassung exportiert wird, wird separat behandelt.
+**Mehrere Mitarbeiter / Zeiträume:** Die XML-Datei kann Einträge mehrerer Mitarbeiter und mehrerer Monate enthalten. Das Tool filtert automatisch das relevante Quartal heraus.
 
 ---
 
-## Verwendung des Tools
+## Standard Quartalsreport
 
-### Zugriff auf das Tool
+Der Standard-Report erstellt den klassischen Quartalsbericht mit vollständiger Bonus-Berechnung für alle Mitarbeiter in der XML-Datei.
 
-Das Tool ist als Webdienst verfÃ¼gbar. Ã–ffnen Sie Ihren Browser und navigieren Sie zur URL des Quartalsreport Generators (z.B. `http://localhost:9999` oder die von Ihrem Administrator bereitgestellte Adresse).
+### Schritt-für-Schritt
 
-### Schritt-fÃ¼r-Schritt-Anleitung
+#### 1. Tab „Standard Quartalsreport" auswählen
 
-#### 1. Dateien hochladen
+Der Tab ist standardmäßig aktiv. Falls nicht, einfach oben auf **„Standard Quartalsreport"** klicken.
 
-![Upload-Formular](docs/screenshot-upload.png)
+#### 2. Dateien auswählen
 
-1. Klicken Sie auf **CSV (Soll/Ist)** und wÃ¤hlen Sie Ihre Soll-Ist-CSV-Datei aus
-2. Klicken Sie auf **XML (ZeiteintrÃ¤ge)** und wÃ¤hlen Sie Ihre Zeiterfassungs-XML-Datei aus
-3. (Optional) Geben Sie das gewÃ¼nschte Quartal an, z.B. `2025Q3` oder `Q3-2025`
-   - Wenn leer gelassen, wÃ¤hlt das Tool automatisch das aktuellste Quartal aus der XML (neueste Buchungsperiode)
+| Feld | Pflicht | Beschreibung |
+|------|---------|--------------|
+| **CSV (Soll/Ist)** | Optional* | Budget-CSV-Datei. Wird nicht benötigt, wenn der Administrator bereits eine zentrale CSV hinterlegt hat. |
+| **XML (Zeiteinträge)** | Ja | Zeiterfassungs-XML. Mehrfachauswahl möglich – alle gewählten XML-Dateien werden zusammengeführt. |
+| **Quartal** | Optional | Format: `Q3-2025` oder `2025Q3`. Wenn leer, wählt das Tool automatisch das Quartal mit den meisten/neuesten Buchungen aus der XML. |
 
-#### 2. Report erzeugen
+*Wenn keine zentrale CSV hinterlegt ist und keine hochgeladen wird, erscheint eine Fehlermeldung.
 
-1. Klicken Sie auf den Button **Report erzeugen**
-2. Der Upload-Fortschritt wird angezeigt
-3. Die Verarbeitung beginnt automatisch
+#### 3. Report erzeugen
 
-#### 3. Verarbeitung verfolgen
+Klicken Sie auf **„Report erzeugen"**. Der Fortschrittsbereich öffnet sich automatisch:
 
-WÃ¤hrend der Verarbeitung sehen Sie:
-- **Fortschrittsbalken** â€“ Zeigt den aktuellen Bearbeitungsstand
-- **Statusmeldung** â€“ Informiert Ã¼ber den aktuellen Verarbeitungsschritt
-- **Warteschlange** â€“ Position in der Warteschlange (falls mehrere Jobs aktiv)
+- **Statusmeldung** – zeigt den aktuellen Verarbeitungsschritt
+- **Fortschrittsbalken** – prozentualer Fortschritt
+- **Warteschlange** – Position, falls andere Reports gleichzeitig verarbeitet werden
 
 #### 4. Ergebnis herunterladen
 
-Nach erfolgreicher Verarbeitung:
-1. Der Button **Ergebnis herunterladen** erscheint
-2. Klicken Sie darauf, um die Excel-Datei herunterzuladen
-3. Die Datei heiÃŸt z.B. `Q3-2025.xlsm`
+Nach erfolgreicher Verarbeitung erscheint der Button **„Ergebnis herunterladen"**. Die Datei wird als `<XMLDateiname>_Q3-2025.xlsm` gespeichert.
 
-#### 5. Neuen Report starten
+#### 5. Weiterer Report
 
-- Klicken Sie auf **Neuen Report starten**, um weitere Reports zu erzeugen
+Klicken Sie auf **„Neuen Report starten"** um weitere Reports zu erstellen.
+
+---
+
+### Quartal automatisch vs. manuell
+
+| Situation | Empfehlung |
+|-----------|-----------|
+| XML enthält genau ein Quartal | Feld leer lassen – automatische Erkennung |
+| XML enthält mehrere Quartale, aktuellstes gewünscht | Feld leer lassen |
+| XML enthält mehrere Quartale, älteres gewünscht | Quartal explizit eingeben, z.B. `Q2-2025` |
+| Jahresende: XML enthält Q4 und evtl. Q1 des Folgejahres | Quartal explizit eingeben |
+
+---
+
+## Flexibler Report
+
+Der flexible Report ermöglicht Berichte für beliebige Zeiträume, einzelne Mitarbeiter oder Projekte – auch über Quartalsgrenzen hinaus.
+
+> **Hinweis:** Beim Flexiblen Report müssen CSV und XML immer hochgeladen werden – eine zentrale CSV wird hier nicht verwendet.
+
+---
+
+### Übersicht der Einstellungen
+
+```
+┌─────────────────────────────────────────────────┐
+│  Dateien      CSV + XML (beide Pflicht)          │
+│  Report-Typ   Welche Art von Bericht?            │
+│  Zeitraum     Von/Bis (Datum)                    │
+│  Gliederung   Wie wird der Zeitraum aufgeteilt?  │
+│  Filter       Nur bestimmte Projekte/Mitarbeiter │
+│  Optionen     Was soll der Report enthalten?     │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+### Report-Typen
+
+#### Quartalsreport (`quarterly`)
+
+Entspricht dem Standard-Report, aber über den flexiblen Weg. Der Zeitraum wird automatisch auf das vollständige Quartal gerundet, das das „Von"-Datum enthält.
+
+**Typische Verwendung:**
+- Wenn zusätzliche Filter (Mitarbeiter, Projekte) benötigt werden
+- Wenn die Gliederung angepasst werden soll
+
+**Empfohlene Gliederung:** Nach Monaten getrennt
+
+---
+
+#### Benutzerdefinierter Zeitraum (`custom_period`)
+
+Beliebiger Zeitraum von Datum A bis Datum B – auch monats- oder quartalsübergreifend.
+
+**Typische Verwendung:**
+- Halbjahresberichte (z.B. 01.01.–30.06.)
+- Projektphasen, die nicht an Monatsgrenzen ausgerichtet sind
+- Berichte für z.B. 15.08.–15.09.
+
+**Beispiel-Konfigurationen:**
+
+| Zeitraum | Von | Bis | Empfohlene Gliederung |
+|----------|-----|-----|----------------------|
+| Q4 2025 komplett | 01.10.2025 | 31.12.2025 | Nach Monaten |
+| Halbjahr 2025 | 01.01.2025 | 30.06.2025 | Nach Monaten |
+| Einzelne Phase | 15.08.2025 | 15.09.2025 | Ein Block |
+| Gesamtjahr | 01.01.2025 | 31.12.2025 | Nach Monaten |
+
+---
+
+#### Monatsreport (`monthly`)
+
+Bericht für genau einen Monat. Das Datumsintervall wird automatisch auf den vollständigen Monat des „Von"-Datums gerundet.
+
+**Typische Verwendung:**
+- Einzelner Monatsauszug für Rückfragen
+- Zwischenstand während des laufenden Quartals
+
+---
+
+#### Jahresreport (`yearly`)
+
+Bericht für das vollständige Kalenderjahr des „Von"-Datums.
+
+**Typische Verwendung:**
+- Jahresüberblick für Führungskräfte
+- Gesamtauswertung Projektportfolio
+
+**Empfohlene Gliederung:** Nach Monaten getrennt (sonst wird die Gesamtmenge kaum lesbar)
+
+---
+
+#### Projekt-Zusammenfassung (`project`)
+
+Alle Buchungen auf ein oder mehrere Projekte, über den gewählten Zeitraum.
+
+**Typische Verwendung:**
+- Wie viele Stunden wurden insgesamt auf Projekt X gebucht?
+- Mitarbeiterübersicht für ein bestimmtes Projekt
+
+**Filter:** Immer mit dem Projektfilter kombinieren (sonst wird alles ausgegeben).
+
+---
+
+#### Mitarbeiter-Zusammenfassung (`employee`)
+
+Alle Buchungen eines oder mehrerer Mitarbeiter über den gewählten Zeitraum.
+
+**Typische Verwendung:**
+- Individuelle Stundenauswertung
+- Vergleich zwischen Mitarbeitern
+
+**Filter:** Immer mit dem Mitarbeiterfilter kombinieren.
+
+---
+
+### Zeitliche Gliederung
+
+Die Gliederung bestimmt, wie der gewählte Zeitraum in der Excel-Ausgabe aufgeteilt wird.
+
+#### Nach Monaten getrennt (`monthly`)
+
+Der Zeitraum wird in Monatsblöcke aufgeteilt. Jeder Monat erhält einen eigenen Abschnitt im Mitarbeiterblatt.
+
+**Ergebnis:** Jan | Feb | Mär | ... (je ein Block)
+
+**Empfehlung für:** Quartals-, Halbjahres- und Jahresberichte. Identisch zum Standard-Report.
+
+**Hinweis:** Wenn der Zeitraum genau ein Quartal umfasst und der Typ „Quartalsreport" gewählt ist, wird automatisch der Standard-Quartalsreport-Modus verwendet (mit Quartalssummary und Übertragshilfe).
+
+---
+
+#### Ein zusammenhängender Block (`period`)
+
+Der gesamte Zeitraum wird als ein einzelner Block behandelt – unabhängig davon, ob er mehrere Monate umfasst.
+
+**Ergebnis:** 15.08–15.09 (ein Block)
+
+**Empfehlung für:**
+- Kurze, nicht monatsausgerichtete Zeiträume
+- Wenn nur die Gesamtsumme interessiert, nicht die Monatsaufteilung
+
+---
+
+#### Nach Wochen (`weekly`)
+
+Der Zeitraum wird in Wochenblöcke (Mo–So) aufgeteilt.
+
+**Ergebnis:** KW 33 | KW 34 | KW 35 | ...
+
+**Empfehlung für:**
+- Sehr detaillierte Auswertungen
+- Kurze Zeiträume (wenige Wochen)
+
+---
+
+#### Keine Gliederung (`none`)
+
+Keine zeitliche Unterteilung – nur eine Gesamtsumme aller Buchungen im Zeitraum.
+
+**Ergebnis:** Gesamtsumme über den gesamten Zeitraum
+
+**Empfehlung für:**
+- Schnelle Übersicht ohne Details
+- Wenn nur die Endsumme benötigt wird
+
+---
+
+### Kombinationsmatrix – was passt zusammen?
+
+| Ziel | Report-Typ | Zeitraum | Gliederung | Filter |
+|------|-----------|----------|-----------|--------|
+| Normaler Quartalsbericht | Quartalsreport | erstes Datum im Quartal | Nach Monaten | – |
+| Halbjahr mit Monatsspalten | Benutzerdefiniert | 01.01.–30.06. | Nach Monaten | – |
+| Nur eine Projektphase | Benutzerdefiniert | Phasendaten | Ein Block | Projekt |
+| Ein Mitarbeiter, ein Quartal | Quartalsreport | – | Nach Monaten | Mitarbeiter |
+| Gesamtstunden Projekt X | Projekt-Zusammenfassung | Jahresanfang–Jahresende | Keine | Projekt X |
+| Vergleich zwei MA über Q3 | Mitarbeiter-Zusammenfassung | Q3-Zeitraum | Nach Monaten | MA A, MA B |
+| Jahresübersicht | Jahresreport | irgendein Datum im Jahr | Nach Monaten | – |
+| Wochendetails einer Phase | Benutzerdefiniert | 4 Wochen | Nach Wochen | Projekt oder MA |
+
+---
+
+### Filter
+
+Filter schränken ein, welche Daten in den Report einfließen.
+
+#### Nur bestimmte Projekte
+
+Aktivieren Sie die Checkbox **„Nur bestimmte Projekte"** und tragen Sie die Projektkürzel/Codes kommagetrennt ein.
+
+```
+Beispiel: 0283.05, 0299.02, 7716.01
+```
+
+Die Eingabe muss dem Projektcode entsprechen, wie er in der XML-Zeiterfassung verwendet wird (nicht zwingend der vollständige Name).
+
+**Tipp:** Wenn Sie sich unsicher sind, welcher Code verwendet wird, schauen Sie in die Zeiterfassungs-XML: Das `project`-Feld enthält den genauen Wert.
+
+---
+
+#### Nur bestimmte Mitarbeiter
+
+Aktivieren Sie die Checkbox **„Nur bestimmte Mitarbeiter"** und tragen Sie die Namen kommagetrennt ein.
+
+```
+Beispiel: C. Trapp SV, A. Kokott, M. Mustermann
+```
+
+Der Name muss exakt dem `staff_name`-Feld in der XML entsprechen (Groß-/Kleinschreibung beachten).
+
+---
+
+### Report-Optionen (Checkboxen)
+
+| Option | Standard | Beschreibung |
+|--------|---------|--------------|
+| **Bonus-Berechnung einschließen** | ✓ An | Berechnet bonusberechtigte Stunden (Soll/Ist-Vergleich). Deaktivieren für reine Stundenauswertungen ohne Budgetbezug. |
+| **Budget-Übersicht einschließen** | ✓ An | Fügt ein Blatt „Projekt-Budget-Übersicht" mit allen Budgets aus der CSV hinzu. |
+| **Zusammenfassungsblatt einschließen** | ✓ An | Erstellt ein Deckblatt mit Gesamtübersicht aller Mitarbeiter. |
+| **Sonderprojekte ausschließen** | ✗ Aus | Filtert 0000-Projekte komplett aus dem Bericht heraus. Nützlich für reine Projektarbeit-Berichte. |
+
+---
+
+### Typische Workflows – Flexibler Report
+
+#### Workflow A: Quartalsbericht für einen Mitarbeiter
+
+1. Report-Typ: **Quartalsreport**
+2. Zeitraum: **01.10.2025 – 31.12.2025**
+3. Gliederung: **Nach Monaten getrennt**
+4. Filter: **Nur bestimmte Mitarbeiter → Name eintragen**
+5. Optionen: alle Standard
+
+---
+
+#### Workflow B: Projektauswertung für ein Halbjahr
+
+1. Report-Typ: **Benutzerdefinierter Zeitraum**
+2. Zeitraum: **01.01.2025 – 30.06.2025**
+3. Gliederung: **Nach Monaten getrennt**
+4. Filter: **Nur bestimmte Projekte → Projekt-Code eintragen**
+5. Optionen: Bonus-Berechnung **aus**, Budget-Übersicht **an**
+
+---
+
+#### Workflow C: Schnell-Check über Quartalsgrenzen
+
+Manchmal liegen Projektphasen über zwei Quartale (z.B. 15.11.2025–15.02.2026).
+
+1. Report-Typ: **Benutzerdefinierter Zeitraum**
+2. Zeitraum: **15.11.2025 – 15.02.2026**
+3. Gliederung: **Nach Monaten getrennt** (empfohlen) oder **Ein Block**
+4. Filter: nach Bedarf
+5. Optionen: alle Standard
+
+Das Tool verarbeitet in diesem Fall Daten quartalsübergreifend korrekt.
+
+---
+
+#### Workflow D: Jahresübersicht ohne Bonus
+
+1. Report-Typ: **Jahresreport**
+2. Zeitraum: **01.01.2025** (Enddatum wird automatisch auf 31.12.2025 gesetzt)
+3. Gliederung: **Nach Monaten getrennt**
+4. Optionen: Bonus-Berechnung **aus**, Zusammenfassungsblatt **an**
+
+---
+
+## Admin-Bereich
+
+Der Admin-Bereich ist passwortgeschützt und nur für Administratoren zugänglich.
+
+### Anmelden
+
+1. Tab **„Admin"** klicken
+2. Benutzername und Passwort eingeben
+3. **„Anmelden"** klicken
+
+Die Anmeldedaten werden für die aktuelle Browser-Sitzung gespeichert. Beim Schließen des Browsers oder manuellen Abmelden werden sie gelöscht.
+
+> Die Zugangsdaten werden vom Administrator in der `.env`-Datei auf dem Server festgelegt.
+
+---
+
+### Zentrale Budget-CSV
+
+Die zentrale Budget-CSV ermöglicht es, die Soll-Ist-Daten einmalig zu hinterlegen. Standard-Reports können dann ohne erneuten CSV-Upload gestartet werden.
+
+#### Aktuelle CSV anzeigen
+
+Nach dem Anmelden zeigt der Bereich **„Zentrale Budget-CSV"** automatisch:
+- Dateiname der aktuell hinterlegten CSV
+- Dateigröße
+- Datum der letzten Aktualisierung
+
+Wenn noch keine CSV hinterlegt ist, erscheint die Meldung *„Noch keine Budget-CSV hinterlegt."*
+
+#### CSV aktualisieren
+
+1. Klicken Sie auf **„Datei auswählen"** im Abschnitt „Neue CSV hochladen"
+2. Wählen Sie die neue CSV-Datei aus
+3. Klicken Sie auf **„CSV aktualisieren"**
+
+Nach dem Upload wird die Dateiinfo automatisch aktualisiert.
+
+**Wann aktualisieren?** Immer wenn in der Projektverwaltung neue Projekte oder Meilensteine angelegt wurden oder sich Budgets geändert haben.
+
+---
+
+### System-Update (OTA)
+
+Ermöglicht das Einspielen von Software-Updates, ohne Docker neu starten zu müssen.
+
+#### Update-Datei erstellen
+
+Im Repository-Verzeichnis auf dem Entwicklungsrechner:
+
+```bash
+git archive HEAD --format=zip > update.zip
+```
+
+#### Update einspielen
+
+1. Klicken Sie auf **„Datei auswählen"** im Abschnitt „System-Update"
+2. Wählen Sie die `update.zip` aus
+3. Klicken Sie auf **„Update einspielen"**
+4. Nach erfolgreichem Upload lädt die Seite automatisch neu (~4 Sekunden)
+
+**Hinweis:** Das System erkennt Änderungen an den Webdateien automatisch durch den eingebauten Reload-Mechanismus. Kein Neustart des Docker-Containers notwendig.
 
 ---
 
@@ -114,213 +440,124 @@ Nach erfolgreicher Verarbeitung:
 
 ### Grundprinzip
 
-Das Tool berechnet bonusberechtigte Stunden nach folgendem Prinzip:
+**Bonusberechtigt sind alle Stunden, bei denen das Budget nicht zu 100% ausgeschöpft wurde.**
 
-**Bonusberechtigt sind alle Stunden, bei denen das Budget nicht zu 100% ausgeschÃ¶pft wurde.**
+Sobald das Soll eines Eintrags überschritten wird, ist der gesamte Eintrag nicht bonusberechtigt – eine anteilige Anerkennung findet nicht statt. Manuelle Korrekturen sind über die Spalte „Bonus-Anpassung" möglich.
 
-Sobald das Soll eines Eintrags Ã¼berschritten wird, ist der gesamte Eintrag nicht bonusberechtigt â€“ eine anteilige Anerkennung findet nicht statt, auch wenn ein Teil der Stunden noch im Budget liegt. Dies muss dann manuell bearbeitet werden.
-
-### Berechnung
+---
 
 ### Meilenstein-Typen
 
-Die Spalte **Typ** in der Excel-Ausgabe unterscheidet drei FÃ¤lle:
+Die Spalte **Typ** in der Excel-Ausgabe unterscheidet drei Fälle:
 
-#### Typ G â€“ RegulÃ¤re Projekte
+#### Typ G – Reguläre Projekte
 
-- Alle Projekte, deren Nummer **nicht** mit `0000` beginnt, werden als `G` gekennzeichnet.
-- Die Soll-/Ist-Werte stammen vollstÃ¤ndig aus der CSV-Datei; es gibt keine festen Standard-Budgets.
-- Bonusberechtigt: Solange `(Ist / Soll) < 100%`. Sobald das Soll Ã¼berschritten ist, fÃ¤llt der komplette Eintrag aus der Bonusberechtigung â€“ es gibt keine anteilige Anerkennung.
-- Die interne Monats-/Quartalslogik bleibt zwar bestehen, wird aber nicht separat in der Typ-Spalte ausgewiesen.
+- Alle Projekte, deren Nummer **nicht** mit `0000` beginnt
+- Soll/Ist-Werte stammen vollständig aus der CSV-Datei
+- Bonusberechtigt: solange `Ist / Soll < 100%`
 
-#### Typ M â€“ Sonderprojekt (Monat)
+#### Typ M – Sonderprojekt (Monatsbudget)
 
-- `M` wird ausschlieÃŸlich fÃ¼r **0000-Sonderprojekte** genutzt, die Ã¼ber ein festes **Monatsbudget** verfÃ¼gen (z.B. 8h/Monat pro Mitarbeiter).
-- Vergleich: Ist-Stunden des Monats vs. Monatsbudget.
-- Bonusberechtigt: Wenn `(Ist / Monatsbudget) < 100%`.
-- Das Tool ergÃ¤nzt fehlende Soll-/Ist-Werte automatisch anhand der hinterlegten Budgets (siehe *Limits und Budgets*).
+- Nur für **0000-Sonderprojekte** mit festem **Monatsbudget** (z.B. 8h/Monat)
+- Vergleich: Ist-Stunden des Monats vs. Monatsbudget
+- Bonusberechtigt: wenn `Ist-Monat / Monatsbudget < 100%`
 
-#### Typ Q â€“ Sonderprojekt (Quartal)
+**0000-Meilensteine mit Monatsbudget:**
 
-- `Q` wird ebenfalls nur fÃ¼r **0000-Sonderprojekte** verwendet, die quartalsweise Budgets haben (z.B. 4h/Quartal).
-- Vergleich: Kumulierte Ist-Stunden bis einschlieÃŸlich des aktuellen Monats vs. Quartalsbudget.
-- Bonusberechtigt: Wenn `(Kumuliert Ist / Quartalsbudget) < 100%`.
-- Erkennungsmerkmal: Das Wort â€žQuartalâ€œ im Meilensteinnamen oder ein hinterlegtes Quartalsbudget.
+| Meilenstein | Budget |
+|------------|--------|
+| Einarbeitung neuer Mitarbeiter (max. 8h/Monat pro MA) | 8 h/Monat |
+| Angebote-Ausschreibungen-Kalkulationen (max. 8h/Monat pro MA) | 8 h/Monat |
+| Erstellung Vorlagen (übergreifend) (max. 8h/Monat pro MA) | 8 h/Monat |
 
-### Sonderprojekte (0000-Projekte)
+#### Typ Q – Sonderprojekt (Quartalsbudget)
 
-Projekte, die mit `0000` beginnen, werden als **Sonderprojekte** behandelt:
+- Nur für **0000-Sonderprojekte** mit festem **Quartalsbudget** (z.B. 4h/Quartal)
+- Vergleich: **kumulierte** Ist-Stunden bis einschließlich des aktuellen Monats vs. Quartalsbudget
+- Bonusberechtigt: wenn `Kumuliert-Ist / Quartalsbudget < 100%`
 
-- Gelten als bonusberechtigt (sofern Budget nicht ausgeschÃ¶pft)
-- Werden separat ausgewiesen als "Bonusberechtigte Stunden Sonderprojekt"
-- Haben oft feste monatliche oder quartalsweise Budgets
+**0000-Meilensteine mit Quartalsbudget:**
 
-**Typische 0000-Meilensteine:**
+| Meilenstein | Budget |
+|------------|--------|
+| Firmenveranstaltungen (max. 4h/Quartal pro MA) | 4 h/Quartal |
+| Vorträge, Repräsentation (übergreifend) (max. 4h/Quartal pro MA) | 4 h/Quartal |
+| Messeauftritt (max. 4h/Quartal pro MA) | 4 h/Quartal |
 
-| Meilenstein | Typ | Budget |
-|------------|-----|--------|
-| Einarbeitung neuer Mitarbeiter | Monat | 8h/Monat |
-| Angebote-Ausschreibungen-Kalkulationen | Monat | 8h/Monat |
-| Erstellung Vorlagen (Ã¼bergreifend) | Monat | 8h/Monat |
-| Firmenveranstaltungen | Quartal | 4h/Quartal |
-| VortrÃ¤ge, ReprÃ¤sentation (Ã¼bergreifend) | Quartal | 4h/Quartal |
-| Messeauftritt | Quartal | 4h/Quartal |
+---
+
+### Farbkennzeichnung (Prozentspalte)
+
+| Bereich | Farbe | Bedeutung |
+|---------|-------|-----------|
+| < 90% | Grün | Budget deutlich unterschritten |
+| 90% – 100% | Gelb | Budget nahezu erreicht |
+| > 100% | Rot | Budget überschritten, kein Bonus |
+
+---
 
 ### Berechnungsbeispiele
 
-#### Beispiel 1: Monatsmeilenstein, nicht ausgeschÃ¶pft
+#### Beispiel 1: Reguläres Projekt – im Budget
 
 ```
-Projekt: 5678
-Meilenstein: Testing
-Typ: G (regulär, Monatslogik)
-Soll: 100h
-Ist: 85h
-Gebuchte Stunden im Januar: 85h
+Projekt: 5678.01 Brandschutzkonzept
+Typ: G
+Soll: 100 h
+Ist (laut Budget): 85 h
+Gebuchte Stunden Januar: 40 h
 Prozent: 85%
 
-â†’ Bonusberechtigt: 85 Stunden (regulÃ¤r)
+→ Bonusberechtigt: 40 h (regulär)
 ```
 
-#### Beispiel 2: Quartalsmeilenstein, teilweise ausgeschÃ¶pft
+#### Beispiel 2: Quartals-Sonderprojekt
 
 ```
 Projekt: 0000
-Meilenstein: Messeauftritt (max. 4h/Quartal pro MA)
-Typ: Q (Sonderprojekt, quartalsweise)
-Quartals-Soll: 4h
-Januar gebuchte Stunden: 2h
-Februar gebuchte Stunden: 1h
-MÃ¤rz gebuchte Stunden: 0.5h
-Kumuliert bis MÃ¤rz: 3.5h
-Prozent: 87.5%
+Meilenstein: Firmenveranstaltungen (max. 4h/Quartal pro MA)
+Typ: Q
+Quartals-Soll: 4 h
 
-â†’ Januar: Bonusberechtigt 2h (Sonderprojekt)
-â†’ Februar: Bonusberechtigt 1h (Sonderprojekt)
-â†’ MÃ¤rz: Bonusberechtigt 0.5h (Sonderprojekt)
+Oktober:   1,5 h gebuchte Stunden → kumuliert 1,5 h → 37,5% → Bonus 1,5 h
+November:  1,5 h gebuchte Stunden → kumuliert 3,0 h → 75,0% → Bonus 1,5 h
+Dezember:  1,0 h gebuchte Stunden → kumuliert 4,0 h → 100,0% → Bonus 1,0 h
+
+→ Gesamt bonusberechtigt: 4 h
 ```
 
-#### Beispiel 3: Budget zu 100% oder mehr ausgeschÃ¶pft
+#### Beispiel 3: Budget überschritten
 
 ```
-Projekt: 4321
-Meilenstein: Dokumentation
-Typ: G (regulär, Monatslogik)
-Soll: 50h
-Ist: 55h
-Gebuchte Stunden im Februar: 55h
+Projekt: 4321.02 Gutachten
+Typ: G
+Soll: 50 h
+Ist (laut Budget): 55 h
 Prozent: 110%
 
-â†’ NICHT bonusberechtigt (Budget Ã¼berschritten)
+→ NICHT bonusberechtigt (Budget überschritten)
+→ Manuelle Anpassung möglich über Spalte "Bonus-Anpassung"
 ```
-
-### Farbkennzeichnung
-
-Die Prozentspalte wird zur besseren Ãœbersicht farblich markiert:
-
-| Prozentbereich | Farbe | Bedeutung |
-|---------------|-------|-----------|
-| < 90% | ðŸŸ¢ GrÃ¼n | Budget deutlich unterschritten |
-| 90% - 100% | ðŸŸ¡ Gelb | Budget nahezu erreicht |
-| > 100% | ðŸ”´ Rot | Budget Ã¼berschritten |
 
 ---
 
-## Bonus-Anpassungen
+### Bonus-Anpassungen
 
-### Zweck der Bonus-Anpassung
+Die Spalte **„Bonus-Anpassung (h)"** in der Excel-Datei ermöglicht manuelle Korrekturen.
 
-Die Spalte **Bonus-Anpassung (h)** ermÃ¶glicht **manuelle Korrekturen** der automatisch berechneten bonusberechtigten Stunden.
+**Wann nötig?**
+- Fehlbuchungen wurden nachträglich identifiziert
+- Bonus trotz 100%-Auslastung nach Rücksprache mit Projektleitung
+- Anteilige Anpassungen bei besonderen Umständen
 
-### Wann werden Anpassungen benÃ¶tigt?
+**Wie?**
+- Positive Werte (+) erhöhen die Bonusstunden
+- Negative Werte (-) verringern die Bonusstunden
+- Formel: `Bonus gesamt = Bonus Basis + Summe(Anpassungen)`
 
-- NachtrÃ¤gliche Korrekturen aufgrund von Fehlbuchungen
-- Manuelle BonusgewÃ¤hrung trotz 100% Budget-Auslastung
-- AbzÃ¼ge bei besonderen UmstÃ¤nden
-- Korrekturen nach RÃ¼cksprache mit Projektleitung
+Anpassungen werden automatisch in die Monatssumme und ins Deckblatt übernommen.
 
-### Wie funktionieren Anpassungen?
-
-1. **Positive Werte** (+) erhÃ¶hen die bonusberechtigten Stunden
-2. **Negative Werte** (-) verringern die bonusberechtigten Stunden
-3. Anpassungen werden **automatisch summiert** und zur Basis-Bonusberechnung addiert
-
-**Formel:**
-```
-Bonusberechtigte Stunden (Gesamt) = Bonusberechtigte Stunden (Basis) + Summe(Bonus-Anpassungen)
-```
-
-### Beispiel fÃ¼r Anpassungen
-
-**Ausgangssituation:**
-
-| Meilenstein | Typ | Gebuchte Stunden | Bonus (Basis) | Bonus-Anpassung | Bonus (Gesamt) |
-|------------|-----|------------------|---------------|-----------------|----------------|
-| Entwicklung | G | 75h | 75h | 0 | 75h |
-| Testing | G | 50h | 50h | 0 | 50h |
-| **Summe** | | **125h** | **125h** | **0** | **125h** |
-
-**Nach Anpassung:**
-
-Sie tragen in der Spalte "Bonus-Anpassung" folgende Werte ein:
-- Entwicklung: `-10` (Fehlbuchung wurde identifiziert)
-- Testing: `+5` (NachtrÃ¤gliche BonusgewÃ¤hrung nach RÃ¼cksprache)
-
-| Meilenstein | Typ | Gebuchte Stunden | Bonus (Basis) | Bonus-Anpassung | Bonus (Gesamt) |
-|------------|-----|------------------|---------------|-----------------|----------------|
-| Entwicklung | G | 75h | 75h | -10 | 65h |
-| Testing | G | 50h | 50h | +5 | 55h |
-| **Summe** | | **125h** | **125h** | **-5** | **120h** |
-
-**Wichtig:**
-- Anpassungen werden **automatisch** in die Monatssumme Ã¼bernommen
-- Die Quartals-Gesamtsumme wird ebenfalls automatisch aktualisiert
-- Die Ãœbertragshilfe berÃ¼cksichtigt die angepassten Werte
-
-### Getrennte Anpassungen: RegulÃ¤r vs. Sonderprojekt
-
-- Anpassungen fÃ¼r **regulÃ¤re Projekte** beeinflussen "Bonusberechtigte Stunden"
-- Anpassungen fÃ¼r **0000-Sonderprojekte** beeinflussen "Bonusberechtigte Stunden Sonderprojekt"
-- Die Trennung erfolgt automatisch anhand der Projektnummer
-
----
-
-## Limits und Budgets
-
-### Monatliche Budgets (0000-Projekte)
-
-Folgende Meilensteine haben **feste monatliche Budgets** pro Mitarbeiter:
-
-| Meilenstein | Budget pro Monat |
-|------------|------------------|
-| Einarbeitung neuer Mitarbeiter (max. 8h/Monat pro MA) | 8 Stunden |
-| Angebote-Ausschreibungen-Kalkulationen (max. 8h/Monat pro MA) | 8 Stunden |
-| Erstellung Vorlagen (Ã¼bergreifend) (max. 8h/Monat pro MA) | 8 Stunden |
-
-**Verhalten:**
-- Das Tool setzt automatisch `Soll = 8h` und `Ist = Gebuchte Stunden`
-- Wenn mehr als 8h gebucht werden, sind nur die ersten 8h bonusberechtigt
-
-### Quartalsbudgets (0000-Projekte)
-
-Folgende Meilensteine haben **feste Quartalsbudgets** pro Mitarbeiter:
-
-| Meilenstein | Budget pro Quartal |
-|------------|-------------------|
-| Firmenveranstaltungen (max. 4h/Quartal pro MA) | 4 Stunden |
-| VortrÃ¤ge, ReprÃ¤sentation (Ã¼bergreifend) (max. 4h/Quartal pro MA) | 4 Stunden |
-| Messeauftritt (max. 4h/Quartal pro MA) | 4 Stunden |
-
-**Verhalten:**
-- BudgetprÃ¼fung erfolgt **kumuliert** Ã¼ber das gesamte Quartal
-- Erst wenn 4h im Quartal erreicht sind, wird der Meilenstein zu 100% ausgelastet
-- Ãœberstunden sind nicht bonusberechtigt
-
-### Budgets aus CSV Ã¼berschreiben
-
-Wenn in der CSV-Datei fÃ¼r 0000-Projekte Soll/Ist-Werte vorhanden sind, werden diese **nicht** Ã¼berschrieben â€“ das Tool respektiert die CSV-Werte.
-
-Nur wenn **Soll = 0** und **Ist = 0**, greift das Tool auf die fest definierten Budgets zurÃ¼ck.
+**Wichtig:** Anpassungen für reguläre Projekte (Typ G) und Sonderprojekte (Typ M/Q) werden getrennt summiert und separat ausgewiesen.
 
 ---
 
@@ -328,147 +565,150 @@ Nur wenn **Soll = 0** und **Ist = 0**, greift das Tool auf die fest definierten 
 
 ### Struktur der Excel-Datei
 
-Die generierte Excel-Datei (z.B. `Q3-2025.xlsm`) enthÃ¤lt:
+Die generierte Excel-Datei enthält (je nach Report-Konfiguration):
 
-1. **Ãœbersichtsblatt** (Deckblatt)
-2. **Pro Mitarbeiter ein separates Arbeitsblatt**
+| Blatt | Inhalt |
+|-------|--------|
+| **Deckblatt** | Gesamtübersicht aller Mitarbeiter mit Monats- und Quartalssummen |
+| **Projekt-Budget-Übersicht** | Alle Projekte aus der CSV mit Budgets und Stundensätzen |
+| **[Mitarbeitername]** | Ein Blatt pro Mitarbeiter mit monatlichen Detaildaten |
 
-### 1. Ãœbersichtsblatt (Deckblatt)
+---
 
-Das erste Blatt zeigt eine **GesamtÃ¼bersicht** Ã¼ber alle Mitarbeiter:
+### Deckblatt (Übersichtsblatt)
 
-**Inhalt:**
+Das erste Blatt zeigt eine Gesamtübersicht:
 
-- **Monatliche Summen** Ã¼ber alle Mitarbeiter:
-  - Gesamtstunden
-  - Bonusberechtigte Stunden
-  - Bonusberechtigte Stunden Sonderprojekt
-- **Quartalssummen** Ã¼ber alle Mitarbeiter
-- **Liste aller Mitarbeiter** im Quartal
+- Monatliche Summen über **alle** Mitarbeiter (Gesamtstunden, Bonusstunden regulär, Bonusstunden Sonderprojekt)
+- Quartalssummen
+- Liste aller Mitarbeiter im Quartal
 
-**Besonderheit:** Alle Werte sind **dynamische Excel-Formeln**, die sich automatisch aktualisieren, wenn Ã„nderungen in den MitarbeiterblÃ¤ttern vorgenommen werden.
+Alle Werte sind **dynamische Excel-Formeln** – Änderungen in den Mitarbeiterblättern (z.B. Bonus-Anpassungen) werden automatisch übernommen.
 
-### 2. MitarbeiterblÃ¤tter
+---
 
-FÃ¼r jeden Mitarbeiter im Quartal wird ein separates Arbeitsblatt erstellt.
+### Mitarbeiterblätter
 
-**Aufbau pro Monat:**
+Pro Mitarbeiter ein Blatt. Aufbau pro Zeitblock (Monat/Woche/Block):
 
-#### Tabellenkopf
+#### Spalten
 
 | Spalte | Bedeutung |
 |--------|-----------|
 | **Projekt** | Projektname oder -nummer |
 | **Meilenstein** | Arbeitspaket/Meilensteinname |
-| **Typ** | `G` = reguläres Projekt, `M` = 0000-Monatsbudget, `Q` = 0000-Quartalsbudget |
-| **Soll (h)** | Budget-Sollstunden (Monat/Quartal) |
-| **Ist (h)** | Verbrauchte Ist-Stunden laut Budget (Monat) oder kumuliert (Quartal) |
-| **[Monat] (h)** | TatsÃ¤chlich gebuchte Stunden im jeweiligen Monat |
-| **%** | Prozentsatz der Budget-Auslastung (farblich markiert) |
-| **Bonus-Anpassung (h)** | Feld fÃ¼r manuelle Korrekturen |
+| **Typ** | `G` = regulär, `M` = 0000 Monatsbudget, `Q` = 0000 Quartalsbudget |
+| **Soll (h)** | Budget-Sollstunden |
+| **Ist (h)** | Verbrauchte Ist-Stunden laut Budget (bei Q: kumuliert über Quartal) |
+| **[Monat] (h)** | Tatsächlich gebuchte Stunden im Block |
+| **%** | Budget-Auslastung (farblich markiert) |
+| **Bonus-Anpassung (h)** | Editierbar – für manuelle Korrekturen |
 
-#### Summenwerte (pro Monat)
+#### Summenzeilenbereich pro Block
 
-- **Summe** â€“ Gesamtstunden des Monats
-- **Bonusberechtigte Stunden** â€“ Automatisch berechnete bonusberechtigte Stunden (regulÃ¤r)
-  - Spalte 7: Basis-Wert
-  - Spalte 8: Summe der Anpassungen
-  - Spalte 6: **Gesamt-Wert** (= Basis + Anpassungen)
-- **Bonusberechtigte Stunden Sonderprojekt** â€“ Automatisch berechnete bonusberechtigte Stunden (0000-Projekte)
-  - Spalte 7: Basis-Wert
-  - Spalte 8: Summe der Anpassungen
-  - Spalte 6: **Gesamt-Wert** (= Basis + Anpassungen)
-
-#### Quartalszusammenfassung
-
-Am Ende jedes Mitarbeiterblattes:
-
-- **Quartalsmeilensteine mit Quartalssoll** â€“ Ãœbersicht aller Q-Meilensteine
-- **Gesamtstunden (Quartal)** â€“ Summe aller gebuchten Stunden
-- **Bonusberechtigte Stunden (Quartal)** â€“ Quartalssumme regulÃ¤rer Bonusstunden
-- **Bonusberechtigte Stunden Sonderprojekt (Quartal)** â€“ Quartalssumme 0000-Bonusstunden
-
-#### Ãœbertragshilfe
-
-Die letzte Tabelle "**Ãœbertragshilfe**" erleichtert das Ãœbertragen in die Konzernvorlage:
-
-| Spalte | Bedeutung |
-|--------|-----------|
-| **Monat** | Monat (z.B. Januar 2025) |
-| **Mitarbeiter** | Mitarbeitername |
-| **Prod. Stunden** | Produktive Stunden (Gesamtstunden des Monats) |
-| **Bonusberechtigte Stunden** | Bonusstunden regulÃ¤r (inklusive Anpassungen) |
-| **Bonusberechtigte Stunden Sonderprojekt** | Bonusstunden 0000-Projekte (inklusive Anpassungen) |
-
-**Verwendung:**
-- Markieren Sie die Zeile fÃ¼r den gewÃ¼nschten Monat
-- Kopieren Sie die Werte in Ihre Konzernvorlage
+- **Summe** – Gesamtstunden des Blocks
+- **Bonusberechtigte Stunden** – reguläre Bonusstunden (Basis / Anpassung / Gesamt)
+- **Bonusberechtigte Stunden Sonderprojekt** – 0000-Bonusstunden (Basis / Anpassung / Gesamt)
 
 ---
 
-## HÃ¤ufige Probleme
+### Übertragshilfe (Standard-Quartalsbericht)
 
-### Problem: "Job ist fehlgeschlagen"
+Die letzte Tabelle auf jedem Mitarbeiterblatt erleichtert das Übertragen in die Konzernvorlage:
+
+| Spalte | Bedeutung |
+|--------|-----------|
+| **Monat** | Monat (z.B. Oktober 2025) |
+| **Mitarbeiter** | Mitarbeitername |
+| **Prod. Stunden** | Gesamtstunden des Monats |
+| **Bonusberechigte Stunden** | Reguläre Bonusstunden inkl. Anpassungen |
+| **Bonusberechtigte Stunden Sonderprojekt** | 0000-Bonusstunden inkl. Anpassungen |
+
+**Verwendung:** Zeile markieren → in Konzernvorlage einfügen.
+
+---
+
+## Häufige Probleme
+
+### „Job ist fehlgeschlagen" / „Interner Fehler"
 
 **Ursachen:**
-- CSV-Datei hat nicht die erwarteten Spalten
-- XML-Datei ist fehlerhaft oder leer
-- Keine Daten fÃ¼r das gewÃ¤hlte Quartal vorhanden
+- CSV hat nicht die erwarteten Spalten (`Projekte`, `Arbeitspaket`, etc.)
+- XML enthält keine Daten für das gewählte Quartal
+- Ungültiges Datumsformat
 
-**LÃ¶sung:**
-1. ÃœberprÃ¼fen Sie, ob die CSV-Datei die Spalten `Projekte`, `Arbeitspaket`, `Sollstunden Budget`, `Iststunden` enthÃ¤lt
-2. ÃœberprÃ¼fen Sie, ob die XML-Datei ZeiteintrÃ¤ge fÃ¼r das gewÃ¼nschte Quartal enthÃ¤lt
-3. Versuchen Sie, das Quartal automatisch wÃ¤hlen zu lassen (Feld leer lassen)
+**Lösung:**
+1. Prüfen Sie, ob die CSV-Spalten korrekt sind (besonders `Projekte` und `Arbeitspaket`)
+2. Lassen Sie das Quartal automatisch erkennen (Feld leer lassen)
+3. Prüfen Sie, ob die XML Zeiteinträge im richtigen Zeitraum enthält
 
-### Problem: "Mitarbeiter fehlt in der Ausgabe"
+---
 
-**Ursache:**
-- Der Mitarbeiter hat im betrachteten Quartal keine ZeiteintrÃ¤ge in der XML-Datei
+### „Noch keine Budget-CSV hinterlegt" (Standard-Report)
 
-**LÃ¶sung:**
-- ÃœberprÃ¼fen Sie, ob der Mitarbeiter in der XML-Datei enthalten ist
-- Stellen Sie sicher, dass die XML alle gewÃ¼nschten Mitarbeiter enthÃ¤lt
+**Ursache:** Keine zentrale CSV im Admin-Bereich hinterlegt und keine CSV beim Upload angegeben.
 
-### Problem: "Bonusberechtigte Stunden stimmen nicht"
+**Lösung:** Entweder beim Standard-Report eine CSV hochladen, oder im Admin-Bereich eine zentrale CSV hinterlegen.
 
-**Ursache:**
-- Typ-Spalte (G/M/Q) wird falsch zugeordnet
-- Budget-Werte aus CSV sind inkorrekt
+---
 
-**LÃ¶sung:**
-1. ÃœberprÃ¼fen Sie, ob Quartalsmeilensteine das Wort "Quartal" im Namen enthalten
-2. PrÃ¼fen Sie die Soll/Ist-Werte in der CSV-Datei
-3. Nutzen Sie die Spalte "Bonus-Anpassung" fÃ¼r manuelle Korrekturen
+### „Mitarbeiter fehlt in der Ausgabe"
 
-### Problem: "Excel-Datei enthÃ¤lt kaum Daten"
+**Ursache:** Der Mitarbeiter hat im gewählten Zeitraum keine Buchungen in der XML.
 
-**Ursache:**
-- CSV- und XML-Projekte/Meilensteine stimmen nicht Ã¼berein
-- Normalisierung der Projektnamen schlÃ¤gt fehl
+**Lösung:** Prüfen Sie, ob der Mitarbeiter in der XML enthalten ist. Beim Flexiblen Report: Zeitraum prüfen.
 
-**LÃ¶sung:**
-- Stellen Sie sicher, dass Projektnamen/-nummern in CSV und XML Ã¼bereinstimmen
-- ÃœberprÃ¼fen Sie, ob Meilensteinnamen konsistent sind
+---
 
-### Problem: "Prozentspalte ist nicht farbig"
+### Bonusstunden stimmen nicht
 
-**Ursache:**
-- Kein Soll-Budget definiert oder Soll = 0
+**Ursache:** Typ-Spalte (G/M/Q) wird falsch zugeordnet, oder Budgetwerte in der CSV sind inkorrekt.
 
-**ErklÃ¤rung:**
-- Farbmarkierung erfolgt nur, wenn ein Budget (Soll > 0) definiert ist
-- Ohne Budget kann keine Prozent-Auslastung berechnet werden
+**Lösung:**
+1. Prüfen Sie, ob Quartalsmeilensteine das Wort „Quartal" im Namen enthalten
+2. Prüfen Sie die Soll-Werte in der CSV
+3. Nutzen Sie die Spalte „Bonus-Anpassung" für manuelle Korrekturen
+
+---
+
+### CSV und XML passen nicht zusammen (kaum Daten)
+
+**Ursache:** Projektnamen/-codes in CSV und XML weichen voneinander ab (z.B. `1234.01` vs. `1234.01 Projektname`).
+
+**Lösung:**
+- Projektnamen in CSV und XML vergleichen
+- Das Tool verwendet den ersten Token (Code vor dem Leerzeichen) als Fallback-Schlüssel – kurze Codes funktionieren meistens besser
+
+---
+
+### Prozentspalte ist nicht farbig
+
+**Ursache:** Kein Soll-Budget definiert (Soll = 0). Ohne Budget kann keine Auslastung berechnet werden.
+
+**Erklärung:** Bei Typ G mit Soll = 0 greift keine Farbmarkierung. Bei Typ M/Q werden die fest hinterlegten Budgets verwendet.
+
+---
+
+### Admin: „Ungültige Zugangsdaten"
+
+**Ursache:** Falsches Passwort oder falscher Benutzername.
+
+**Hinweis:** Nach 5 Fehlversuchen innerhalb einer Minute wird der Zugang für 60 Sekunden gesperrt (Sicherheitsmechanismus). Danach normal weiterprobieren.
+
+---
+
+### Admin: „Zu viele Anfragen"
+
+**Ursache:** Sicherheitsmechanismus ausgelöst (5 Fehlversuche/Minute).
+
+**Lösung:** 60 Sekunden warten, dann erneut versuchen.
 
 ---
 
 ## Kontakt und Support
 
-Bei technischen Problemen oder Fragen zur Nutzung wenden Sie sich bitte an Ihren IT-Administrator oder die verantwortliche Fachabteilung.
+Bei technischen Problemen wenden Sie sich an Ihren Administrator.
 
 ---
 
-**Version:** 1.0
-**Datum:** Januar 2026
-**Tool-Version:** Siehe README.md
-
-
+*Version: 2.0 · Februar 2026*
