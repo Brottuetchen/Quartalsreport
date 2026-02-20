@@ -19,6 +19,7 @@
         <div class="tabs">
           <button class="tab-btn active" data-tab="standard">Standard Quartalsreport</button>
           <button class="tab-btn" data-tab="flexible">Flexibler Report</button>
+          <button class="tab-btn" data-tab="admin">Admin</button>
         </div>
       </section>
 
@@ -176,6 +177,57 @@
         </form>
       </section>
 
+      <!-- Admin Panel -->
+      <section id="admin-form" class="card tab-content">
+        <!-- Login overlay -->
+        <div id="admin-login" class="admin-section">
+          <h3>Admin-Zugang</h3>
+          <div class="field">
+            <label for="admin-user">Benutzername</label>
+            <input id="admin-user" type="text" autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="admin-password">Passwort</label>
+            <input id="admin-password" type="password" autocomplete="current-password" />
+          </div>
+          <button id="admin-login-btn" type="button">Anmelden</button>
+          <div id="admin-login-error" class="error hidden">Ungültige Zugangsdaten.</div>
+        </div>
+
+        <!-- Admin content (shown after login) -->
+        <div id="admin-content" class="hidden">
+
+          <!-- Budget CSV -->
+          <div class="admin-section">
+            <h3>Zentrale Budget-CSV</h3>
+            <div id="budget-info" class="admin-info-box">Lade...</div>
+            <div class="field">
+              <label for="admin-csv-file">Neue CSV hochladen</label>
+              <input id="admin-csv-file" type="file" accept=".csv" />
+            </div>
+            <button id="admin-csv-upload-btn" type="button">CSV aktualisieren</button>
+            <div id="admin-csv-msg" class="admin-msg hidden"></div>
+          </div>
+
+          <!-- OTA Update -->
+          <div class="admin-section">
+            <h3>System-Update</h3>
+            <p class="help-text">
+              ZIP-Datei erstellen mit: <code>git archive HEAD --format=zip &gt; update.zip</code><br>
+              Nach dem Upload erkennt uvicorn die Änderungen automatisch (~3 Sekunden).
+            </p>
+            <div class="field">
+              <label for="admin-update-file">Update-ZIP hochladen</label>
+              <input id="admin-update-file" type="file" accept=".zip" />
+            </div>
+            <button id="admin-update-btn" type="button">Update einspielen</button>
+            <div id="admin-update-msg" class="admin-msg hidden"></div>
+          </div>
+
+          <button id="admin-logout-btn" type="button" class="btn-secondary">Abmelden</button>
+        </div>
+      </section>
+
       <section id="status-card" class="card hidden">
         <h2>Status</h2>
         <div class="status-line">
@@ -198,5 +250,6 @@
       </section>
     </main>
     <script src="/static/app-flexible.js"></script>
+    <script src="/static/app-admin.js"></script>
   </body>
 </html>

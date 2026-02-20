@@ -94,9 +94,14 @@ class FlexibleReportGenerator:
 
         self.progress_cb(20, f"Erstelle Report mit {len(time_blocks)} Zeitblöcken...")
 
-        # For quarterly reports with monthly grouping, use existing logic
+        # For quarterly reports with monthly grouping within a SINGLE quarter, use existing logic.
+        # If the date range spans multiple quarters, fall through to the flexible path so that
+        # all months are included in the report (not just the first quarter).
+        start_q = pd.Period(self.config.start_date, freq="Q")
+        end_q   = pd.Period(self.config.end_date, freq="Q")
         if (self.config.report_type == ReportType.QUARTERLY and
-            self.config.time_grouping == TimeGrouping.BY_MONTH):
+            self.config.time_grouping == TimeGrouping.BY_MONTH and
+            start_q == end_q):
             return self._generate_quarterly_report(
                 df_csv, df_budget, milestone_parent_map, df_xml_filtered, output_path
             )

@@ -75,6 +75,7 @@ label {
 }
 
 input[type="text"],
+input[type="password"],
 input[type="file"],
 select,
 input[type="date"] {
@@ -333,4 +334,54 @@ button:disabled {
   .field-group {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Admin panel ─────────────────────────────────────────────────────────── */
+.admin-section {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.admin-info-box {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.admin-msg {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.375rem;
+  font-size: 0.9rem;
+}
+
+.admin-msg.success {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.admin-msg.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  margin-top: 1rem;
+}
+
+.btn-secondary:hover {
+  background: var(--bg-primary);
 }

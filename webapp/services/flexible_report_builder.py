@@ -22,6 +22,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from ..models import ReportConfig, ReportType, TimeBlock
 from ..report_generator import (
     MONTHLY_BUDGETS,
+    QUARTERLY_BUDGETS,
     _create_project_budget_sheet,
     _add_vba_macro,
     de_to_float,
@@ -66,7 +67,19 @@ def build_flexible_report(
 
     employees = sorted(all_data["staff_name"].unique())
     total_emps = max(len(employees), 1)
-    
+
+    # Precompute cumulative hours per (staff_name, proj_norm, ms_norm, quarter) for
+    # quarterly-budget milestones (e.g. "Firmenveranstaltungen max. 4h/Quartal").
+    # This lets us evaluate bonus eligibility per quarter even when time blocks are months.
+    _all_wq = all_data.copy()
+    _all_wq['_quarter_period'] = _all_wq['date_parsed'].dt.to_period('Q')
+    quarterly_cum_map: dict = (
+        _all_wq
+        .groupby(['staff_name', 'proj_norm', 'ms_norm', '_quarter_period'])['hours']
+        .sum()
+        .to_dict()
+    )
+
     employee_summary_data = {}
 
     for idx_emp, emp in enumerate(employees, start=1):
@@ -91,6 +104,8 @@ def build_flexible_report(
             block_data_merged["Projekte"] = block_data_merged["Projekte"].fillna(block_data_merged["proj_norm"])
             block_data_merged["Meilenstein"] = block_data_merged["Meilenstein"].fillna(block_data_merged["ms_norm"])
 
+            block_quarter = pd.Period(time_block.start, freq='Q')
+
             for idx, row in block_data_merged.iterrows():
                 ms_name = row["Meilenstein"]
                 proj_name = row.get("Projekte", "")
@@ -104,6 +119,16 @@ def build_flexible_report(
                     else:
                         block_data_merged.loc[idx, "Soll"] = 0
                     block_data_merged.loc[idx, "Ist"] = row["hours"]
+                elif is_bonus_project(proj_name) and ms_name in QUARTERLY_BUDGETS:
+                    # Quarterly budget: Soll = fixed quarterly limit,
+                    # Ist = cumulative hours within the same quarter (for % / bonus eligibility).
+                    # "Stunden in Block" (hours_val) stays as the actual block hours.
+                    quarterly_budget = QUARTERLY_BUDGETS[ms_name]
+                    cum_q = quarterly_cum_map.get(
+                        (emp, row["proj_norm"], row["ms_norm"], block_quarter), 0.0
+                    )
+                    block_data_merged.loc[idx, "Soll"] = quarterly_budget
+                    block_data_merged.loc[idx, "Ist"]  = cum_q
 
             ws.append([f"--- {time_block.name} ---"])
             ws[f"A{current_row}"].font = Font(bold=True, size=12)

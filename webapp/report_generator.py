@@ -758,10 +758,14 @@ def _create_cover_sheet(
         cell.border = border
     current_row += 1
 
-    # Get all months from first employee (all employees should have same months)
+    # Build month labels from the authoritative `months` parameter so that every month
+    # in the quarter appears in the cover sheet, even if the first employee has no
+    # entries for that month.
     if employee_summary_data:
-        first_emp = list(employee_summary_data.keys())[0]
-        month_labels = list(employee_summary_data[first_emp]['months'].keys())
+        month_labels = [
+            f"{MONTH_NAMES.get(int(m.month), m.strftime('%B'))} {m.year}"
+            for m in months
+        ]
 
         # For each month, create a summary row
         for month_label in month_labels:

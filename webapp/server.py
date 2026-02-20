@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import secrets
 import shutil
 import uuid
+import zipfile
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -13,6 +15,7 @@ from typing import Deque, Dict, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -25,6 +28,13 @@ DATA_DIR = BASE_DIR.parent / "data"
 JOBS_DIR = DATA_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_CSV_PATH = Path(os.getenv("DEFAULT_CSV_PATH", str(DATA_DIR / "default_budget.csv")))
+WEBAPP_OVERRIDE_DIR = DATA_DIR / "webapp_override"
+
+# Admin credentials – set via environment variables (never hardcode)
+_ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
+_http_basic = HTTPBasic()
 
 CLEANUP_RETENTION_DAYS = 7
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # einmal täglich prüfen
@@ -198,6 +208,89 @@ def _queue_position(job_id: str) -> Optional[int]:
         return None
 
 
+def _require_admin(credentials: HTTPBasicCredentials = Depends(_http_basic)) -> None:
+    """Dependency that enforces admin credentials via HTTP Basic Auth."""
+    if not _ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Admin-Bereich nicht konfiguriert (ADMIN_PASSWORD fehlt)")
+    user_ok = secrets.compare_digest(credentials.username.encode(), _ADMIN_USER.encode())
+    pass_ok = secrets.compare_digest(credentials.password.encode(), _ADMIN_PASSWORD.encode())
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="Ungültige Zugangsdaten",
+            headers={"WWW-Authenticate": "Basic realm=\"Quartalsreport Admin\""},
+        )
+
+
+@app.get("/admin/budget/info", dependencies=[Depends(_require_admin)])
+async def admin_budget_info():
+    """Return metadata about the currently stored default budget CSV."""
+    if not DEFAULT_CSV_PATH.exists():
+        return JSONResponse({"exists": False})
+    stat = DEFAULT_CSV_PATH.stat()
+    return JSONResponse({
+        "exists": True,
+        "filename": DEFAULT_CSV_PATH.name,
+        "size_bytes": stat.st_size,
+        "last_modified": datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z",
+    })
+
+
+@app.post("/admin/budget", dependencies=[Depends(_require_admin)])
+async def admin_upload_budget(csv_file: UploadFile = File(...)):
+    """Replace the default budget CSV. Only accessible to admins."""
+    if csv_file.content_type not in {
+        "text/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"
+    }:
+        raise HTTPException(status_code=400, detail="CSV-Datei wird erwartet")
+    DEFAULT_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    await _save_upload(csv_file, DEFAULT_CSV_PATH)
+    return JSONResponse({"status": "ok", "filename": DEFAULT_CSV_PATH.name})
+
+
+@app.post("/admin/update", dependencies=[Depends(_require_admin)])
+async def admin_ota_update(zip_file: UploadFile = File(...)):
+    """
+    OTA code update: upload a zip created via `git archive HEAD --format=zip`.
+    Files under the `webapp/` prefix are extracted to /app/webapp/ and persisted
+    in /app/data/webapp_override/ so they survive container restarts.
+    uvicorn's --reload mode picks up the changed files automatically.
+    """
+    if not (zip_file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="ZIP-Datei wird erwartet")
+
+    raw = await zip_file.read()
+    await zip_file.close()
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Ungültige ZIP-Datei")
+
+    webapp_entries = [n for n in zf.namelist() if n.startswith("webapp/") and not n.endswith("/")]
+    if not webapp_entries:
+        raise HTTPException(status_code=400, detail="ZIP enthält kein 'webapp/'-Verzeichnis")
+
+    # Security: reject any path that would escape the target directory
+    for name in webapp_entries:
+        parts = Path(name).parts
+        if ".." in parts or any(p.startswith("/") for p in parts):
+            raise HTTPException(status_code=400, detail=f"Unzulässiger Pfad im ZIP: {name}")
+
+    WEBAPP_OVERRIDE_DIR.mkdir(parents=True, exist_ok=True)
+
+    for name in webapp_entries:
+        # Strip leading "webapp/" prefix → relative path within the webapp package
+        rel = Path(*Path(name).parts[1:])
+        for target_root in (BASE_DIR, WEBAPP_OVERRIDE_DIR):
+            dest = target_root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(name))
+
+    zf.close()
+    return JSONResponse({"status": "reloading", "files_updated": len(webapp_entries)})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -223,10 +316,9 @@ async def create_job(
     xml_path = job_dir / (xml_file.filename or "source.xml")
 
     if csv_file:
+        # Use uploaded CSV for this job only – the global default is managed via /admin/budget
         csv_path = job_dir / (csv_file.filename or "source.csv")
         await _save_upload(csv_file, csv_path)
-        DEFAULT_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(csv_path, DEFAULT_CSV_PATH)
     else:
         shutil.copy2(DEFAULT_CSV_PATH, csv_path)
     await _save_upload(xml_file, xml_path)

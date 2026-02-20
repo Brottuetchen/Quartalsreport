@@ -21,9 +21,11 @@ py-embed/
 vendor/
 
 # User data
+BSP/
 export_Fred_Larry/
 data/jobs/*
 !data/jobs/.gitkeep
+data/default_budget.csv
 
 # Reports
 report_*.xlsx
