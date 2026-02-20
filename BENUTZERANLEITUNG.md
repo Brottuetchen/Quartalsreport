@@ -468,7 +468,7 @@ Bei technischen Problemen oder Fragen zur Nutzung wenden Sie sich bitte an Ihren
 ---
 
 **Version:** 1.0
-**Datum:** Januar 2025
+**Datum:** Januar 2026
 **Tool-Version:** Siehe README.md
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -11,7 +13,13 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..models import ReportConfig, ReportType, TimeGrouping
+logger = logging.getLogger(__name__)
+
+# Upload size limits (kept in sync with server.py constants)
+_MAX_CSV_SIZE = 500 * 1024 * 1024   # 500 MB
+_MAX_XML_SIZE = 100 * 1024 * 1024   # 100 MB
+
+from ..models import ReportConfig, ReportType, TimeGrouping  # noqa: E402
 from ..services import FlexibleReportGenerator
 
 
@@ -106,12 +114,12 @@ async def generate_flexible_report(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Save uploaded files
-        csv_path = job_dir / "budget.csv"
-        xml_path = job_dir / "timesheets.xml"
+        # Save uploaded files with size limits and safe filenames
+        csv_path = job_dir / _safe_filename(csv_file.filename or "", "budget.csv")
+        xml_path = job_dir / _safe_filename(xml_file.filename or "", "timesheets.xml")
 
-        await _save_upload(csv_file, csv_path)
-        await _save_upload(xml_file, xml_path)
+        await _save_upload(csv_file, csv_path, max_bytes=_MAX_CSV_SIZE)
+        await _save_upload(xml_file, xml_path, max_bytes=_MAX_XML_SIZE)
 
         # Generate output filename
         if report_type_enum == ReportType.QUARTERLY:
@@ -120,7 +128,7 @@ async def generate_flexible_report(
         else:
             output_filename_base = f"Report_{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}.xlsx"
 
-        xml_prefix = Path(xml_file.filename).stem if xml_file.filename else ""
+        xml_prefix = Path(_safe_filename(xml_file.filename or "", "")).stem
         if xml_prefix:
             output_filename_base = f"{xml_prefix}_{output_filename_base}"
 
@@ -145,12 +153,15 @@ async def generate_flexible_report(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         # Clean up on error
         import shutil
+        logger.error("Report generation failed", exc_info=True)
         if job_dir.exists():
             shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Interner Fehler bei der Report-Erstellung")
 
 
 @router.get("/types")
@@ -168,13 +179,32 @@ async def get_report_types() -> JSONResponse:
     })
 
 
-async def _save_upload(upload: UploadFile, destination: Path) -> None:
-    """Save an uploaded file to destination."""
+async def _save_upload(upload: UploadFile, destination: Path, max_bytes: int = _MAX_XML_SIZE) -> None:
+    """Save an uploaded file with a size limit. Raises HTTP 413 if exceeded."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("wb") as buffer:
-        while True:
-            chunk = await upload.read(1024 * 1024)  # 1MB chunks
-            if not chunk:
-                break
-            buffer.write(chunk)
-    await upload.close()
+    bytes_written = 0
+    try:
+        with destination.open("wb") as buffer:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Datei zu groß (max. {max_bytes // (1024 * 1024)} MB)",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+
+
+def _safe_filename(name: str, fallback: str) -> str:
+    """Strip path components and allow only safe characters in a filename."""
+    stem = Path(name).name
+    safe = re.sub(r"[^\w.\-]", "_", stem)
+    return safe[:128] or fallback

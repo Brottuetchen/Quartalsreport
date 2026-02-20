@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
+import re
 import secrets
 import shutil
+import time
 import uuid
 import zipfile
 from collections import deque
@@ -30,6 +33,11 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_CSV_PATH = Path(os.getenv("DEFAULT_CSV_PATH", str(DATA_DIR / "default_budget.csv")))
 WEBAPP_OVERRIDE_DIR = DATA_DIR / "webapp_override"
 
+# Upload size limits
+MAX_CSV_SIZE = 500 * 1024 * 1024   # 500 MB – CSV kann sehr groß sein
+MAX_XML_SIZE = 100 * 1024 * 1024   # 100 MB
+MAX_ZIP_SIZE =  50 * 1024 * 1024   #  50 MB – OTA-Update
+
 # Admin credentials – set via environment variables (never hardcode)
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 _ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
@@ -38,6 +46,20 @@ _http_basic = HTTPBasic()
 
 CLEANUP_RETENTION_DAYS = 7
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # einmal täglich prüfen
+
+# ── Audit-Logger ──────────────────────────────────────────────────────────────
+_audit_logger = logging.getLogger("admin_audit")
+_audit_logger.setLevel(logging.INFO)
+_audit_logger.propagate = False
+_audit_handler = logging.FileHandler(str(DATA_DIR / "admin_audit.log"), encoding="utf-8")
+_audit_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+_audit_logger.addHandler(_audit_handler)
+
+# ── Rate-Limiter (In-Memory Sliding-Window) ───────────────────────────────────
+# Tracks timestamps of failed auth attempts per IP; max 5 per 60 seconds.
+_admin_rate: Dict[str, deque] = {}
+_RATE_LIMIT = 5
+_RATE_WINDOW = 60.0  # seconds
 
 
 @dataclass
@@ -93,15 +115,35 @@ queue_lock = asyncio.Lock()
 current_job_id: Optional[str] = None
 
 
-async def _save_upload(upload: UploadFile, destination: Path) -> None:
+async def _save_upload(upload: UploadFile, destination: Path, max_bytes: int = MAX_XML_SIZE) -> None:
+    """Save an uploaded file with a size limit. Raises HTTP 413 if exceeded."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("wb") as buffer:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            buffer.write(chunk)
-    await upload.close()
+    bytes_written = 0
+    try:
+        with destination.open("wb") as buffer:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Datei zu groß (max. {max_bytes // (1024 * 1024)} MB)",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+
+
+def _safe_filename(name: str, fallback: str) -> str:
+    """Strip path components and allow only safe characters in a filename."""
+    stem = Path(name).name  # removes any directory traversal
+    safe = re.sub(r"[^\w.\-]", "_", stem)
+    return safe[:128] or fallback
 
 
 def _job_progress_updater(job: Job):
@@ -208,22 +250,47 @@ def _queue_position(job_id: str) -> Optional[int]:
         return None
 
 
-def _require_admin(credentials: HTTPBasicCredentials = Depends(_http_basic)) -> None:
-    """Dependency that enforces admin credentials via HTTP Basic Auth."""
+def _require_admin(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(_http_basic),
+) -> str:
+    """Dependency that enforces admin credentials via HTTP Basic Auth.
+    Returns the client IP for use in audit log entries.
+    """
+    ip = request.client.host if request.client else "unknown"
+
+    # ── Rate limit: check before verifying credentials ────────────────────────
+    now = time.monotonic()
+    window = _admin_rate.setdefault(ip, deque())
+    while window and now - window[0] > _RATE_WINDOW:
+        window.popleft()
+    if len(window) >= _RATE_LIMIT:
+        _audit_logger.warning("Rate-limit reached ip=%s", ip)
+        raise HTTPException(
+            status_code=429,
+            detail="Zu viele fehlgeschlagene Versuche. Bitte warten.",
+        )
+
     if not _ADMIN_PASSWORD:
         raise HTTPException(status_code=503, detail="Admin-Bereich nicht konfiguriert (ADMIN_PASSWORD fehlt)")
+
     user_ok = secrets.compare_digest(credentials.username.encode(), _ADMIN_USER.encode())
     pass_ok = secrets.compare_digest(credentials.password.encode(), _ADMIN_PASSWORD.encode())
     if not (user_ok and pass_ok):
+        window.append(time.monotonic())
+        _audit_logger.warning("Auth failed ip=%s user=%r", ip, credentials.username)
         raise HTTPException(
             status_code=401,
             detail="Ungültige Zugangsdaten",
             headers={"WWW-Authenticate": "Basic realm=\"Quartalsreport Admin\""},
         )
 
+    _audit_logger.info("Auth ok ip=%s user=%r", ip, credentials.username)
+    return ip
 
-@app.get("/admin/budget/info", dependencies=[Depends(_require_admin)])
-async def admin_budget_info():
+
+@app.get("/admin/budget/info")
+async def admin_budget_info(ip: str = Depends(_require_admin)):
     """Return metadata about the currently stored default budget CSV."""
     if not DEFAULT_CSV_PATH.exists():
         return JSONResponse({"exists": False})
@@ -236,20 +303,22 @@ async def admin_budget_info():
     })
 
 
-@app.post("/admin/budget", dependencies=[Depends(_require_admin)])
-async def admin_upload_budget(csv_file: UploadFile = File(...)):
+@app.post("/admin/budget")
+async def admin_upload_budget(csv_file: UploadFile = File(...), ip: str = Depends(_require_admin)):
     """Replace the default budget CSV. Only accessible to admins."""
     if csv_file.content_type not in {
         "text/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"
     }:
         raise HTTPException(status_code=400, detail="CSV-Datei wird erwartet")
     DEFAULT_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    await _save_upload(csv_file, DEFAULT_CSV_PATH)
+    await _save_upload(csv_file, DEFAULT_CSV_PATH, max_bytes=MAX_CSV_SIZE)
+    size = DEFAULT_CSV_PATH.stat().st_size
+    _audit_logger.info("Budget CSV uploaded ip=%s size=%d", ip, size)
     return JSONResponse({"status": "ok", "filename": DEFAULT_CSV_PATH.name})
 
 
-@app.post("/admin/update", dependencies=[Depends(_require_admin)])
-async def admin_ota_update(zip_file: UploadFile = File(...)):
+@app.post("/admin/update")
+async def admin_ota_update(zip_file: UploadFile = File(...), ip: str = Depends(_require_admin)):
     """
     OTA code update: upload a zip created via `git archive HEAD --format=zip`.
     Files under the `webapp/` prefix are extracted to /app/webapp/ and persisted
@@ -259,13 +328,30 @@ async def admin_ota_update(zip_file: UploadFile = File(...)):
     if not (zip_file.filename or "").lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="ZIP-Datei wird erwartet")
 
-    raw = await zip_file.read()
+    # Read with size limit into memory
+    raw = b""
+    while True:
+        chunk = await zip_file.read(1024 * 1024)
+        if not chunk:
+            break
+        raw += chunk
+        if len(raw) > MAX_ZIP_SIZE:
+            await zip_file.close()
+            raise HTTPException(
+                status_code=413,
+                detail=f"ZIP zu groß (max. {MAX_ZIP_SIZE // (1024 * 1024)} MB)",
+            )
     await zip_file.close()
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Ungültige ZIP-Datei")
+
+    # Security: reject symlinks (Unix external_attr bits)
+    for info in zf.infolist():
+        if (info.external_attr >> 16) & 0o170000 == 0o120000:
+            raise HTTPException(status_code=400, detail=f"ZIP enthält Symlinks: {info.filename}")
 
     webapp_entries = [n for n in zf.namelist() if n.startswith("webapp/") and not n.endswith("/")]
     if not webapp_entries:
@@ -288,6 +374,7 @@ async def admin_ota_update(zip_file: UploadFile = File(...)):
             dest.write_bytes(zf.read(name))
 
     zf.close()
+    _audit_logger.info("OTA update applied ip=%s files=%d", ip, len(webapp_entries))
     return JSONResponse({"status": "reloading", "files_updated": len(webapp_entries)})
 
 
@@ -313,15 +400,15 @@ async def create_job(
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     csv_path = job_dir / DEFAULT_CSV_PATH.name
-    xml_path = job_dir / (xml_file.filename or "source.xml")
+    xml_path = job_dir / _safe_filename(xml_file.filename or "", "source.xml")
 
     if csv_file:
         # Use uploaded CSV for this job only – the global default is managed via /admin/budget
-        csv_path = job_dir / (csv_file.filename or "source.csv")
-        await _save_upload(csv_file, csv_path)
+        csv_path = job_dir / _safe_filename(csv_file.filename or "", "source.csv")
+        await _save_upload(csv_file, csv_path, max_bytes=MAX_CSV_SIZE)
     else:
         shutil.copy2(DEFAULT_CSV_PATH, csv_path)
-    await _save_upload(xml_file, xml_path)
+    await _save_upload(xml_file, xml_path, max_bytes=MAX_XML_SIZE)
 
     job = Job(
         id=job_id,

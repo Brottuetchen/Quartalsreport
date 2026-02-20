@@ -35,12 +35,14 @@ BSP/Test_*.xlsm
 BSP/~$*.xlsx
 BSP/~$*.xlsm
 
-# Test/Debug files
-test_*.py
+# Test/Debug files (ad-hoc scripts in repo root – not the tests/ directory)
 check_*.py
 validate_*.py
 analyze_*.py
 excel_check_output.txt
+
+# Keep the tests/ directory in git
+!tests/
 
 # Windows-specific scripts (Docker deployment only)
 run_portable.ps1
